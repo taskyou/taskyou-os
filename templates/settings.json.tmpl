@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(ssh {{SERVER_HOST}} *)",
+      "Read",
+      "WebFetch",
+      "WebSearch",
+      "Task(*)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(git push *)",
+      "Bash(git reset *)",
+      "Bash(sudo *)"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# TaskYou hook: fires when a task gets blocked
+# Install to ~/.config/task/hooks/task.blocked on the server
+
+NOTIFICATIONS_FILE="{{SERVER_HOME}}/notifications.jsonl"
+
+TASK_ID="${TASK_ID:-unknown}"
+TASK_TITLE="${TASK_TITLE:-}"
+TASK_PROJECT="${TASK_PROJECT:-}"
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+echo "{\"event\":\"blocked\",\"task_id\":\"${TASK_ID}\",\"title\":$(printf '%s' "$TASK_TITLE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),\"project\":\"${TASK_PROJECT}\",\"timestamp\":\"${TIMESTAMP}\"}" >> "$NOTIFICATIONS_FILE"

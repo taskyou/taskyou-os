@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# <swiftbar.hideAbout>true</swiftbar.hideAbout>
+# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
+# <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
+# <swiftbar.title>{{PROJECT_DISPLAY_NAME}} GM</swiftbar.title>
+
+REMOTE="{{SERVER_HOST}}"
+REMOTE_PATH="export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH"
+PROJECT_DIR="{{LOCAL_PROJECT_DIR}}"
+ACTION="$PROJECT_DIR/bin/{{PROJECT_NAME}}-action"
+STATE_DIR="$PROJECT_DIR/.{{GM_ALIAS}}-state"
+mkdir -p "$STATE_DIR"
+
+# Load logo as template image (renders in system menu bar color)
+LOGO=$(base64 -i "$PROJECT_DIR/bin/logo.png" | tr -d '\n')
+
+# Colored dot images (12x12 PNGs)
+DOT_GREEN="iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAASUlEQVR4nGNgQAMmxyN9gLgSin3Q5dEV3gTi/2j4JoZGqGJ0hejYB1kDNpMxbCLFdIQtUM8Rq6GSLA2kOYlkT5MVrCRHHClJAwCs1fPBWxwX1AAAAABJRU5ErkJggg=="
+DOT_RED="iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAASUlEQVR4nGNgQAP/rQ18gLgSin3Q5dEV3gTi/2j4JoZGqGJ0hejYB1kDNpMxbCLFdIQtUM8Rq6GSLA2kOYlkT5MVrCRHHClJAwCKTxugfkNjngAAAABJRU5ErkJggg=="
+DOT_YELLOW="iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAASUlEQVR4nGNgQAP//zf3AeJKKPZBl0dXeBOI/6PhmxgaoYrRFaJjH2QN2EzGsIkU0xG2QD1HrIZKsjSQ5iSSPU1WsJIccaQkDQAltiqgzzYg6QAAAABJRU5ErkJggg=="
+DOT_GRAY="iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAASUlEQVR4nGNgQAN9fZN9gLgSin3Q5dEV3gTi/2j4JoZGqGJ0hejYB1kDNpMxbCLFdIQtUM8Rq6GSLA2kOYlkT5MVrCRHHClJAwCKTxugfkNjngAAAABJRU5ErkJggg=="
+
+# ── Auto-resolution ──────────────────────────────────────────────────────────
+#
+# When tasks are blocked, the menu bar:
+#   1. SSHes in and reads the agent's tmux pane to understand what's happening
+#   2. Routes to the right action:
+#      - Permission prompt → ty input --enter
+#      - Agent asking a question / idle → spawn headless GM to handle
+#      - Agent exited, work committed → close the task
+#   3. If GM already tried and it's still blocked → escalate to Linear
+#
+# State per task: $STATE_DIR/blocked-<id>
+#   Line 1: attempt count
+#   Line 2: timestamp of last attempt
+#
+# Max 3 attempts per task. 3-min cooldown between attempts.
+# Only one headless GM can run at a time (lock file).
+
+MAX_ATTEMPTS=3
+COOLDOWN_SECS=180
+API_BACKOFF_SECS=600  # 10 min backoff for API/provider errors
+
+# Tasks that need the GM to handle (collected during loop, sent as one batch)
+GM_TASKS=()
+
+check_blocked_task() {
+  local task_id="$1"
+  local state_file="$STATE_DIR/blocked-$task_id"
+  local now=$(date +%s)
+
+  # Initialize state if new
+  if [[ ! -f "$state_file" ]]; then
+    printf '0\n0\n' > "$state_file"
+  fi
+
+  local attempts=$(sed -n '1p' "$state_file")
+  local last_ts=$(sed -n '2p' "$state_file")
+
+  # Exhausted — already escalated to Linear
+  if [[ "$attempts" -ge "$MAX_ATTEMPTS" ]]; then
+    return
+  fi
+
+  # Cooldown — use longer backoff if last check found an API error
+  local cooldown="$COOLDOWN_SECS"
+  if [[ -f "$state_file.api-wait" ]]; then
+    cooldown="$API_BACKOFF_SECS"
+  fi
+  local elapsed=$((now - last_ts))
+  if [[ "$elapsed" -lt "$cooldown" ]]; then
+    return
+  fi
+  rm -f "$state_file.api-wait"
+
+  # Read the agent's screen
+  local pane=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$REMOTE" \
+    "tmux capture-pane -t task-$task_id -p 2>/dev/null" 2>/dev/null)
+
+  if [[ -z "$pane" ]]; then
+    # No tmux session — agent exited. Probably done.
+    GM_TASKS+=("$task_id")
+    printf '%s\n%s\n' "$((attempts + 1))" "$now" > "$state_file"
+    return
+  fi
+
+  # Check for API/provider errors — just wait, don't count as an attempt
+  if echo "$pane" | grep -qiE "API Error: 5[0-9][0-9]|Internal server error|api_error|overloaded_error|rate_limit|529|503 Service|502 Bad Gateway"; then
+    # Back off with longer cooldown, don't increment attempts
+    printf '%s\n%s\n' "$attempts" "$now" > "$state_file"
+    touch "$state_file.api-wait"
+    # Retry the task so it picks up where it left off when API recovers
+    ssh -o ConnectTimeout=3 -o BatchMode=yes "$REMOTE" \
+      "$REMOTE_PATH && ty retry $task_id" >/dev/null 2>&1
+    return
+  fi
+
+  # Check for permission prompt (the common "allow/deny" pattern)
+  if echo "$pane" | grep -qiE "bypass permissions|allow.*deny|permission"; then
+    ssh -o ConnectTimeout=3 -o BatchMode=yes "$REMOTE" \
+      "$REMOTE_PATH && ty input $task_id --enter" >/dev/null 2>&1
+    printf '%s\n%s\n' "$((attempts + 1))" "$now" > "$state_file"
+    return
+  fi
+
+  # Check for idle shell prompt (agent exited, session still open)
+  local last_line=$(echo "$pane" | grep -v '^$' | tail -1)
+  if echo "$last_line" | grep -qE '^\$|^{{SERVER_USER}}@'; then
+    # Agent exited — check if there's work committed, let GM handle
+    GM_TASKS+=("$task_id")
+    printf '%s\n%s\n' "$((attempts + 1))" "$now" > "$state_file"
+    return
+  fi
+
+  # Agent is asking a question or waiting — needs GM
+  GM_TASKS+=("$task_id")
+  printf '%s\n%s\n' "$((attempts + 1))" "$now" > "$state_file"
+}
+
+spawn_gm() {
+  if [[ ${#GM_TASKS[@]} -eq 0 ]]; then
+    return
+  fi
+
+  # Don't spawn if one is already running
+  local lock_file="$STATE_DIR/gm-running"
+  if [[ -f "$lock_file" ]]; then
+    local lock_age=$(( $(date +%s) - $(stat -f %m "$lock_file") ))
+    if [[ "$lock_age" -gt 900 ]]; then
+      rm -f "$lock_file"
+    else
+      return
+    fi
+  fi
+  touch "$lock_file"
+
+  local id_list=$(printf '#%s, ' "${GM_TASKS[@]}" | sed 's/, $//')
+  local log_file="$STATE_DIR/gm-$(date +%Y%m%d-%H%M%S).log"
+
+  (
+    cd "$PROJECT_DIR"
+    CLAUDE_CONFIG_DIR={{CLAUDE_CONFIG_DIR}} claude -p \
+      "Tasks $id_list are blocked on the agents server. For each one: SSH in, check the agent session with tmux capture-pane -t task-<id>, read what the agent needs, and handle it — answer questions via ty input, close done tasks, or retry failed ones. Be concise and efficient." \
+      --dangerously-skip-permissions \
+      >> "$log_file" 2>&1
+    rm -f "$lock_file"
+  ) &
+}
+
+{{#LINEAR}}
+escalate_to_linear() {
+  local task_id="$1"
+
+  # Gather full context so the human can act without server access
+  local task_title=$(echo "$TASKS" | grep "^#${task_id} " | sed 's/.*\] //')
+  local task_output=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE" \
+    "$REMOTE_PATH && ty output $task_id 2>/dev/null" 2>/dev/null | tail -80)
+  local pane=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE" \
+    "tmux capture-pane -t task-$task_id -p 2>/dev/null" 2>/dev/null | tail -40)
+
+  # Build a useful body with all context inline
+  local body_file="$STATE_DIR/escalate-body-$task_id.md"
+  cat > "$body_file" <<BODY
+## Agent task #${task_id}: ${task_title}
+
+This task has been blocked and automated resolution failed after ${MAX_ATTEMPTS} attempts.
+
+### What the agent was doing
+
+The last visible output from the agent session:
+
+\`\`\`
+${pane:-No tmux session found — agent may have exited.}
+\`\`\`
+
+### Task output (last 80 lines)
+
+\`\`\`
+${task_output:-No output available.}
+\`\`\`
+
+### What's needed
+
+Review the agent output above. Common reasons for escalation:
+- Agent needs a credential or API key that isn't configured
+- Agent hit a persistent error (not a transient API issue)
+- Agent is asking a question that requires human judgment
+- Agent completed work but couldn't push/PR due to auth issues
+
+If the work looks done, the branch may already be pushed to the project repo — check for a branch named \`task/${task_id}-*\`.
+BODY
+
+  cat "$body_file" | ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE" \
+    "$REMOTE_PATH && linear issue create \
+      --title '${task_title:-Agent task #$task_id needs attention}' \
+      --body-file - \
+      --label 'Agent Handoff' --state Todo" >/dev/null 2>&1
+
+  rm -f "$body_file"
+}
+{{/LINEAR}}
+
+# Clean up state files for tasks no longer blocked
+cleanup_state() {
+  for f in "$STATE_DIR"/blocked-*; do
+    [[ -f "$f" ]] || continue
+    local id=$(basename "$f" | sed 's/blocked-//')
+    if ! echo "$TASKS" | grep -q "^#${id}.*blocked"; then
+      rm -f "$f" "$f.api-wait"
+    fi
+  done
+}
+
+# ── Fetch tasks ──────────────────────────────────────────────────────────────
+
+TASKS=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$REMOTE" "$REMOTE_PATH && ty list 2>/dev/null" 2>/dev/null)
+
+if [[ $? -ne 0 ]] || [[ -z "$TASKS" ]]; then
+  echo "| templateImage=$LOGO"
+  echo "---"
+  echo "Cannot reach server"
+  echo "---"
+  echo "Refresh | refresh=true"
+  exit 0
+fi
+
+# Count by status
+RUNNING=$(echo "$TASKS" | grep -c "processing" || true)
+BLOCKED=$(echo "$TASKS" | grep -c "blocked" || true)
+PENDING=$(echo "$TASKS" | grep -c "pending" || true)
+
+# Clean up resolved state files
+cleanup_state
+
+# Handle blocked tasks
+if [[ "$BLOCKED" -gt 0 ]]; then
+  while IFS= read -r line; do
+    ID=$(echo "$line" | awk '{print $1}')
+    NUM=${ID#\#}
+    check_blocked_task "$NUM"
+
+{{#LINEAR}}
+    # If maxed out, escalate to Linear (one-time)
+    local_state="$STATE_DIR/blocked-$NUM"
+    if [[ -f "$local_state" ]]; then
+      local_attempts=$(sed -n '1p' "$local_state")
+      if [[ "$local_attempts" -eq "$MAX_ATTEMPTS" ]]; then
+        # Check if we already escalated (marker file)
+        if [[ ! -f "$STATE_DIR/escalated-$NUM" ]]; then
+          escalate_to_linear "$NUM"
+          touch "$STATE_DIR/escalated-$NUM"
+        fi
+      fi
+    fi
+{{/LINEAR}}
+  done <<< "$(echo "$TASKS" | grep "blocked")"
+  spawn_gm
+fi
+
+# ── Menu bar output ──────────────────────────────────────────────────────────
+
+if [[ "$BLOCKED" -gt 0 ]]; then
+  echo "$BLOCKED | templateImage=$LOGO color=red"
+elif [[ "$RUNNING" -gt 0 ]]; then
+  echo "$RUNNING | templateImage=$LOGO"
+else
+  echo "| templateImage=$LOGO"
+fi
+
+echo "---"
+echo "{{PROJECT_DISPLAY_NAME}} GM | disabled=true"
+
+# Status summary
+PARTS=()
+[[ "$RUNNING" -gt 0 ]] && PARTS+=("$RUNNING running")
+[[ "$PENDING" -gt 0 ]] && PARTS+=("$PENDING pending")
+[[ "$BLOCKED" -gt 0 ]] && PARTS+=("$BLOCKED blocked")
+IFS=', '; echo "${PARTS[*]:-No tasks} | disabled=true"; unset IFS
+
+echo "---"
+
+# Blocked tasks
+if [[ "$BLOCKED" -gt 0 ]]; then
+  echo "$TASKS" | grep "blocked" | while IFS= read -r line; do
+    ID=$(echo "$line" | awk '{print $1}')
+    NUM=${ID#\#}
+    TITLE=$(echo "$line" | sed 's/.*\] //')
+    if [[ -f "$STATE_DIR/escalated-$NUM" ]]; then
+      echo "$TITLE (escalated) | image=$DOT_YELLOW bash=$ACTION param1=blocked param2=$NUM terminal=false"
+    elif [[ -f "$STATE_DIR/blocked-$NUM.api-wait" ]]; then
+      echo "$TITLE (API down, waiting) | image=$DOT_YELLOW bash=$ACTION param1=blocked param2=$NUM terminal=false"
+    elif [[ -f "$STATE_DIR/blocked-$NUM" ]]; then
+      attempts=$(sed -n '1p' "$STATE_DIR/blocked-$NUM")
+      echo "$TITLE (attempt $attempts) | image=$DOT_RED bash=$ACTION param1=blocked param2=$NUM terminal=false"
+    else
+      echo "$TITLE | image=$DOT_RED bash=$ACTION param1=blocked param2=$NUM terminal=false"
+    fi
+  done
+fi
+
+# Running tasks
+if [[ "$RUNNING" -gt 0 ]]; then
+  echo "$TASKS" | grep "processing" | while IFS= read -r line; do
+    ID=$(echo "$line" | awk '{print $1}')
+    NUM=${ID#\#}
+    TITLE=$(echo "$line" | sed 's/.*\] //')
+    echo "$TITLE | image=$DOT_GREEN bash=$ACTION param1=running param2=$NUM terminal=false"
+  done
+fi
+
+# Pending tasks
+if [[ "$PENDING" -gt 0 ]]; then
+  echo "$TASKS" | grep "pending" | while IFS= read -r line; do
+    ID=$(echo "$line" | awk '{print $1}')
+    NUM=${ID#\#}
+    TITLE=$(echo "$line" | sed 's/.*\] //')
+    echo "$TITLE | image=$DOT_GRAY bash=$ACTION param1=pending param2=$NUM terminal=false"
+  done
+fi
+
+echo "---"
+echo "Refresh | refresh=true"

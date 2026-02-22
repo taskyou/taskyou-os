@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Route a menu bar action through the GM Claude session in iTerm2.
+# Usage: {{PROJECT_NAME}}-action blocked 8
+#        {{PROJECT_NAME}}-action running 7
+#        {{PROJECT_NAME}}-action pending 3
+
+TYPE="$1"
+NUM="$2"
+TTY_FILE="{{LOCAL_PROJECT_DIR}}/.{{GM_ALIAS}}-tty"
+
+# Build a useful prompt based on action type
+case "$TYPE" in
+  blocked)
+    ACTION="Task #$NUM is blocked. Check the output with ty output $NUM, figure out what went wrong, and either retry it or let me know what you need from me."
+    ;;
+  running)
+    ACTION="Check on task #$NUM — what's the status? Is it making progress?"
+    ;;
+  pending)
+    ACTION="Task #$NUM is pending. Should we execute it now or does it need changes first?"
+    ;;
+  batch)
+    # $NUM and all remaining args are the message
+    shift
+    ACTION="$*"
+    ;;
+  *)
+    ACTION="$*"
+    ;;
+esac
+
+send_action() {
+  local target="$1"
+  osascript <<APPLESCRIPT
+tell application "iTerm"
+  activate
+  $target
+  tell foundSession
+    write text "$ACTION"
+  end tell
+end tell
+APPLESCRIPT
+}
+
+if [[ ! -f "$TTY_FILE" ]]; then
+  osascript <<APPLESCRIPT
+tell application "iTerm"
+  activate
+  set newWindow to (create window with default profile)
+  tell current session of newWindow
+    write text "{{GM_ALIAS}}"
+    delay 5
+    write text "$ACTION"
+  end tell
+end tell
+APPLESCRIPT
+  exit 0
+fi
+
+SAVED_TTY=$(cat "$TTY_FILE")
+
+osascript <<APPLESCRIPT
+tell application "iTerm"
+  activate
+  set foundSession to missing value
+
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is "$SAVED_TTY" then
+          set foundSession to s
+          select t
+          set index of w to 1
+        end if
+      end repeat
+    end repeat
+  end repeat
+
+  if foundSession is missing value then
+    set newWindow to (create window with default profile)
+    tell current session of newWindow
+      write text "{{GM_ALIAS}}"
+      delay 5
+      write text "$ACTION"
+    end tell
+  else
+    tell foundSession
+      write text "$ACTION"
+    end tell
+  end if
+end tell
+APPLESCRIPT
