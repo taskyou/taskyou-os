@@ -7,20 +7,20 @@
 TYPE="$1"
 NUM="$2"
 TTY_FILE="{{LOCAL_PROJECT_DIR}}/.{{GM_ALIAS}}-tty"
+GM_SHELL_CMD='cd {{LOCAL_PROJECT_DIR}} && tty > .{{GM_ALIAS}}-tty && CLAUDE_CONFIG_DIR={{CLAUDE_CONFIG_DIR}} claude'
 
 # Build a useful prompt based on action type
 case "$TYPE" in
   blocked)
-    ACTION="Task #$NUM is blocked. Check the output with ty output $NUM, figure out what went wrong, and either retry it or let me know what you need from me."
+    ACTION="Task $NUM is blocked. Check the output with ty output $NUM, figure out what went wrong, and either retry it or let me know what you need from me."
     ;;
   running)
-    ACTION="Check on task #$NUM — what's the status? Is it making progress?"
+    ACTION="Check on task $NUM - what is the status? Is it making progress?"
     ;;
   pending)
-    ACTION="Task #$NUM is pending. Should we execute it now or does it need changes first?"
+    ACTION="Task $NUM is pending. Should we execute it now or does it need changes first?"
     ;;
   batch)
-    # $NUM and all remaining args are the message
     shift
     ACTION="$*"
     ;;
@@ -29,64 +29,92 @@ case "$TYPE" in
     ;;
 esac
 
-send_action() {
-  local target="$1"
-  osascript <<APPLESCRIPT
-tell application "iTerm"
-  activate
-  $target
-  tell foundSession
-    write text "$ACTION"
-  end tell
-end tell
-APPLESCRIPT
+# Escape for AppleScript string (double quotes -> backslash quote)
+escape_for_applescript() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-if [[ ! -f "$TTY_FILE" ]]; then
-  osascript <<APPLESCRIPT
-tell application "iTerm"
+ESCAPED_ACTION=$(escape_for_applescript "$ACTION")
+ESCAPED_GM_CMD=$(escape_for_applescript "$GM_SHELL_CMD")
+
+launch_new_gm() {
+  osascript -e "
+tell application \"iTerm\"
   activate
   set newWindow to (create window with default profile)
   tell current session of newWindow
-    write text "{{GM_ALIAS}}"
-    delay 5
-    write text "$ACTION"
+    write text \"$ESCAPED_GM_CMD\"
+  end tell
+end tell"
+  sleep 8
+  osascript -e "
+tell application \"iTerm\"
+  activate
+  tell current session of current window
+    write text \"$ESCAPED_ACTION\" newline NO
   end tell
 end tell
-APPLESCRIPT
+
+delay 0.2
+
+tell application \"System Events\"
+  tell process \"iTerm2\"
+    keystroke return
+  end tell
+end tell"
+}
+
+# No TTY file — launch fresh
+if [[ ! -f "$TTY_FILE" ]]; then
+  launch_new_gm
   exit 0
 fi
 
 SAVED_TTY=$(cat "$TTY_FILE")
 
-osascript <<APPLESCRIPT
-tell application "iTerm"
-  activate
-  set foundSession to missing value
-
+# Try to find existing session
+FOUND=$(osascript -e "
+tell application \"iTerm\"
   repeat with w in windows
     repeat with t in tabs of w
       repeat with s in sessions of t
-        if tty of s is "$SAVED_TTY" then
-          set foundSession to s
-          select t
-          set index of w to 1
+        if tty of s is \"$SAVED_TTY\" then
+          return \"found\"
         end if
       end repeat
     end repeat
   end repeat
+  return \"missing\"
+end tell")
 
-  if foundSession is missing value then
-    set newWindow to (create window with default profile)
-    tell current session of newWindow
-      write text "{{GM_ALIAS}}"
-      delay 5
-      write text "$ACTION"
-    end tell
-  else
-    tell foundSession
-      write text "$ACTION"
-    end tell
-  end if
+if [[ "$FOUND" == "found" ]]; then
+  # Focus the window and send to existing session
+  osascript -e "
+tell application \"iTerm\"
+  activate
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is \"$SAVED_TTY\" then
+          select t
+          set index of w to 1
+          tell s
+            write text \"$ESCAPED_ACTION\" newline NO
+          end tell
+        end if
+      end repeat
+    end repeat
+  end repeat
 end tell
-APPLESCRIPT
+
+delay 0.2
+
+tell application \"System Events\"
+  tell process \"iTerm2\"
+    keystroke return
+  end tell
+end tell"
+else
+  # Session gone — launch fresh
+  launch_new_gm
+fi
