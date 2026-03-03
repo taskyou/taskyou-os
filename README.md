@@ -2,15 +2,21 @@
 
 Generate a fully working AI agent management system from a single config file. Creates a local "General Manager" Claude session backed by remote TaskYou agents, with SwiftBar menu bar monitoring, auto-resolution of blocked tasks, and optional Linear/R2 integrations.
 
-## Quick Start — Interactive Setup
+## Quick Start
 
-The fastest way to get started is the built-in launch command. Open Claude Code in this repo and run:
+Install the plugin (one-time):
+
+```
+/plugin install https://github.com/taskyou/taskyou-os
+```
+
+Then run:
 
 ```
 /taskyou-os-launch
 ```
 
-This walks you through everything interactively — it'll ask about your project, spin up a server on [exe.dev](https://exe.dev) (or your own server), install dependencies, write your config, and get your GM running. No manual config editing, no copying commands. It handles the technical details so you don't have to.
+That's it. The command walks you through everything interactively — it'll ask about your project, spin up a server on [exe.dev](https://exe.dev) (or your own server), install dependencies, write your config, and get your AI agent team running. No manual config editing, no copying commands. It handles the technical details so you don't have to.
 
 Don't have an exe.dev account yet? No problem — the setup will check for SSH keys (and create one if needed), then walk you through signing up. The whole thing takes a couple of minutes.
 

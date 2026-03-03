@@ -250,8 +250,25 @@ If GitHub was not chosen, leave GITHUB_REPOS commented out.
 
 ## Phase 4: Run Setup
 
+### Find the TaskYou-OS setup files
+The setup script and templates are part of this plugin. Find them automatically:
 ```bash
-cd <taskyou-os repo path>
+TASKYOU_OS_DIR=$(find ~/.claude/plugins/cache -name "setup.sh" -path "*/taskyou-os/*" -exec dirname {} \; 2>/dev/null | head -1)
+```
+
+If that doesn't find anything (e.g. running from the repo directly), try:
+```bash
+TASKYOU_OS_DIR=$(find ~/Projects -name "setup.sh" -path "*/taskyou-os/*" -exec dirname {} \; 2>/dev/null | head -1)
+```
+
+If still not found, the user may have the repo somewhere else. Ask them, or clone it:
+```bash
+git clone https://github.com/taskyou/taskyou-os.git /tmp/taskyou-os && TASKYOU_OS_DIR=/tmp/taskyou-os
+```
+
+### Run the setup script
+```bash
+cd "$TASKYOU_OS_DIR"
 ./setup.sh all ~/Projects/gms/<PROJECT_NAME>
 ```
 
