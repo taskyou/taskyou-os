@@ -7,7 +7,8 @@ Generate a fully working AI agent management system from a single config file. C
 Install the plugin (one-time):
 
 ```
-/plugin install https://github.com/taskyou/taskyou-os
+/plugin marketplace add taskyou/taskyou-os
+/plugin install taskyou-os
 ```
 
 Then run:

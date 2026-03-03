@@ -1,0 +1,31 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "taskyou-os",
+  "metadata": {
+    "description": "Launch and manage AI agent teams on remote servers."
+  },
+  "owner": {
+    "name": "TaskYou"
+  },
+  "plugins": [
+    {
+      "name": "taskyou-os",
+      "description": "Launch and manage AI agent teams on remote servers. Interactive setup walks you through everything — server provisioning, configuration, and deployment.",
+      "version": "1.0.0",
+      "author": {
+        "name": "TaskYou"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/taskyou/taskyou-os",
+      "repository": "https://github.com/taskyou/taskyou-os",
+      "tags": [
+        "agents",
+        "automation",
+        "taskyou",
+        "remote",
+        "productivity"
+      ]
+    }
+  ]
+}
