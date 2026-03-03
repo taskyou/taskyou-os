@@ -11,7 +11,7 @@ You need [Claude Code](https://claude.ai/claude-code). Open it and run:
 ```
 /plugin marketplace add taskyou/taskyou-os
 /plugin install taskyou-os
-/taskyou-os-launch
+/taskyou-os:launch
 ```
 
 That's it. The setup walks you through everything:
@@ -24,7 +24,7 @@ That's it. The setup walks you through everything:
 
 No git cloning, no manual config editing, no SSH knowledge required. The setup handles SSH keys, exe.dev signup, software installation, and authentication transfer for you.
 
-You can re-run `/taskyou-os-launch` anytime to resume an interrupted setup or fix issues.
+You can re-run `/taskyou-os:launch` anytime to resume an interrupted setup or fix issues.
 
 ## How It Works
 
