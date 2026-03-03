@@ -184,27 +184,39 @@ ssh <HOST> 'curl -fsSL taskyou.dev/install.sh | bash'
 
 After installing, **verify everything worked** by re-running the checks. If something failed, diagnose and retry.
 
-### Account login — the ONE thing the user must do themselves
-Check what needs authentication:
+### Claude authentication — transfer from local machine
+Check if Claude is already authenticated on the server:
 ```bash
 ssh <HOST> 'claude auth status 2>&1'
 ```
 
-And if GitHub was chosen:
+If Claude isn't logged in, copy the user's local credentials to the server automatically:
 ```bash
-ssh <HOST> 'gh auth status 2>&1'
+ssh <HOST> 'mkdir -p ~/.claude'
+scp ~/.claude/.credentials.json <HOST>:~/.claude/.credentials.json
 ```
 
-If Claude isn't logged in, explain: "I need you to log into your Claude account on the server. This connects the agents to your Anthropic subscription so they can think and work."
+Then verify it worked:
+```bash
+ssh <HOST> 'claude auth status 2>&1'
+```
 
-Give them the exact command to copy-paste:
+If the transfer worked (shows `loggedIn: true`), tell the user: "I've connected your agents to your Claude account — they'll use the same subscription you use on your Mac."
+
+If the local credentials file doesn't exist (`~/.claude/.credentials.json`), the user isn't logged in locally either. In that case, fall back to manual login — explain: "I need you to log into your Claude account on the server. This connects the agents to your subscription so they can think and work." Give them:
 ```
 ssh <SERVER_HOSTNAME>
 claude login
 ```
 
-If GitHub is needed and not logged in:
+### GitHub authentication (only if GitHub was chosen)
+```bash
+ssh <HOST> 'gh auth status 2>&1'
 ```
+
+If not logged in, this one does require the user's hands:
+```
+ssh <SERVER_HOSTNAME>
 gh auth login
 ```
 
@@ -245,7 +257,9 @@ cd <taskyou-os repo path>
 
 This will:
 1. **On your Mac:** Create the GM's instruction files, menu bar plugin, and monitoring scripts
-2. **On the server:** Set up workspaces, install hooks, and start the agent daemon
+2. **On the server:** Set up workspaces, install hooks, pre-authorize Claude for each workspace, and start the agent daemon
+
+The "pre-authorize Claude" step runs a quick test command in each workspace so that Claude won't show interactive permission dialogs when the daemon tries to use it later. Without this, agents would get stuck in an infinite retry loop on their first task.
 
 The script will ask two interactive questions:
 
@@ -356,7 +370,9 @@ Diagnose and fix issues yourself when possible:
 
 - **Agent engine not running:** `ssh <HOST> 'nohup ~/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'`
 - **Agent engine running without --dangerous:** `ssh <HOST> 'pkill -f "ty daemon"; sleep 1; nohup ~/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'`
-- **Tasks immediately stuck/blocked:** Almost always means the daemon isn't in `--dangerous` mode. Check with `ssh <HOST> 'pgrep -af "ty daemon"'` — the output must include `--dangerous`
+- **Tasks immediately stuck/blocked:** Could be two things:
+  1. The daemon isn't in `--dangerous` mode. Check with `ssh <HOST> 'pgrep -af "ty daemon"'` — the output must include `--dangerous`
+  2. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. Fix by running: `ssh <HOST> 'cd ~/projects/<workspace> && claude --dangerously-skip-permissions -p "ok" --output-format text'`
 - **Tasks stuck for other reasons:** `ssh <HOST> 'tmux capture-pane -t task-<ID> -p'` — look for auth errors, rate limits, or network issues
 - **Menu bar not updating:** Check SwiftBar is running and the plugin is in `~/Library/Application Support/SwiftBar/`
 - **Node not found:** Templates hardcode a PATH — check where node is: `ssh <HOST> 'which node'` and update rendered templates if needed

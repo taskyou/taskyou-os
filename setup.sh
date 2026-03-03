@@ -368,6 +368,17 @@ setup_server() {
     # Use heredoc via SSH to avoid quoting issues
     ssh "$SERVER_HOST" "cat > $repo_path/CLAUDE.md" <<< "$rendered"
     remote "cd $repo_path && git add CLAUDE.md && git diff --cached --quiet || git commit -q -m 'Add base CLAUDE.md'" 2>/dev/null || true
+
+    # Pre-accept Claude trust/permissions dialogs for this workspace.
+    # Without this, the daemon's first interactive Claude session would show
+    # trust and bypass-permissions dialogs that can't be answered, causing
+    # an infinite kill/retry loop.
+    log "  Warming up Claude for $proj"
+    if ssh "$SERVER_HOST" "cd $repo_path && timeout 30 claude --dangerously-skip-permissions -p 'respond with OK' --output-format text" >/dev/null 2>&1; then
+      ok "  Claude pre-authorized for $proj"
+    else
+      warn "  Claude warm-up failed for $proj — first task may need manual intervention"
+    fi
   done
 
   # Install TaskYou hooks
