@@ -1,80 +1,32 @@
 # TaskYouOS
 
-Generate a fully working AI agent management system from a single config file. Creates a local "General Manager" Claude session backed by remote TaskYou agents, with SwiftBar menu bar monitoring, auto-resolution of blocked tasks, and optional Linear/R2 integrations.
+Your own AI agent team, running on a remote server and managed through Claude Code.
 
-## Quick Start
+You describe what you need in plain English. A "General Manager" on your Mac delegates work to background agents on the server. They research, analyze, write, and build — even while your laptop is closed.
 
-Install the plugin (one-time):
+## Get Started
+
+You need [Claude Code](https://claude.ai/claude-code). Open it and run:
 
 ```
 /plugin marketplace add taskyou/taskyou-os
 /plugin install taskyou-os
-```
-
-Then run:
-
-```
 /taskyou-os-launch
 ```
 
-That's it. The command walks you through everything interactively — it'll ask about your project, spin up a server on [exe.dev](https://exe.dev) (or your own server), install dependencies, write your config, and get your AI agent team running. No manual config editing, no copying commands. It handles the technical details so you don't have to.
+That's it. The setup walks you through everything:
 
-Don't have an exe.dev account yet? No problem — the setup will check for SSH keys (and create one if needed), then walk you through signing up. The whole thing takes a couple of minutes.
+1. **What's your project?** — Tell it what you're working on and it designs your agent workspaces
+2. **Server** — Spins up a cloud server on [exe.dev](https://exe.dev) (or uses your own). Installs everything automatically
+3. **Config** — Writes your configuration file based on your answers
+4. **Deploy** — Sets up the server, authorizes your agents, starts the daemon
+5. **Done** — Gives you a launch command and shows you how to use your new GM
 
-You can also resume an interrupted setup or fix issues by running it again — it detects what's already done and picks up where it left off.
+No git cloning, no manual config editing, no SSH knowledge required. The setup handles SSH keys, exe.dev signup, software installation, and authentication transfer for you.
 
-## Manual Setup
+You can re-run `/taskyou-os-launch` anytime to resume an interrupted setup or fix issues.
 
-If you prefer to do it yourself:
-
-```bash
-# 1. Create your project directory and config
-mkdir -p ~/Projects/gms/myproject
-cp config.example.env ~/Projects/gms/myproject/config.env
-
-# 2. Edit the config
-vim ~/Projects/gms/myproject/config.env
-
-# 3. Run setup (local + server)
-./setup.sh all ~/Projects/gms/myproject
-
-# 4. Follow the printed checklist for manual steps
-```
-
-## What Gets Generated
-
-**Local (your Mac):**
-- `CLAUDE.md` — GM instructions with your project's config baked in
-- `.claude/settings.json` — Claude Code permissions
-- `bin/` — SwiftBar plugin, action router, monitor, retry/board scripts
-- `tmp/wrangler.toml` — R2 upload config (if enabled)
-- LaunchAgent plist for background monitoring
-
-**Server:**
-- Project git repos at `~/projects/<name>/`
-- TaskYou hooks for completed/blocked notifications
-- Linear CLI and @agent polling (if enabled)
-- TaskYou daemon running in `--dangerous` mode
-
-## Setup Modes
-
-```bash
-./setup.sh local ~/Projects/gms/myproject   # Local files only
-./setup.sh server ~/Projects/gms/myproject  # Server provisioning only
-./setup.sh all ~/Projects/gms/myproject     # Both
-```
-
-## Config Reference
-
-See `config.example.env` for all variables with documentation.
-
-**Required:** `PROJECT_NAME`, `PROJECT_DISPLAY_NAME`, `GM_ALIAS`, `SERVER_HOST`, `SERVER_USER`, `SERVER_HOME`, `PROJECTS`, `LOCAL_PROJECT_DIR`, `CLAUDE_CONFIG_DIR`, `GIT_NAME`, `GIT_EMAIL`
-
-**Optional modules:**
-- **Linear** (`LINEAR_ENABLED=true`) — Issue handoff, @agent revisions, CLI
-- **R2** (`R2_ENABLED=true`) — Asset hosting via Cloudflare R2
-
-## Architecture
+## How It Works
 
 ```
 Your Mac                          Server
@@ -91,12 +43,28 @@ Your Mac                          Server
                                   └──────────────────┘
 ```
 
-The GM session translates your instructions into TaskYou tasks. Agents execute them on the server. The SwiftBar plugin monitors status and auto-resolves common blockers (permission prompts, dead sessions). Tasks that need human attention get escalated to Linear.
+- You talk to the **GM** (a Claude session on your Mac) in plain English
+- The GM creates tasks and assigns them to **agents** on the server
+- Agents work in the background — close your laptop, they keep going
+- Get notified when tasks finish or need your attention
+- Optional menu bar widget shows live agent status
 
-## Prerequisites
+## Optional Integrations
 
-- macOS with iTerm2
-- SSH key-based access to the server
-- Claude Code CLI installed locally and on the server
-- SwiftBar (optional, for menu bar monitoring)
-- Node.js on the server (for TaskYou and Linear integration)
+- **Linear** — Escalate tasks that need human attention to your Linear board
+- **Cloudflare R2** — Host files and assets your agents generate
+- **GitHub** — Push agent work to your repositories
+- **SwiftBar** — Menu bar monitoring with auto-resolution of stuck agents
+
+## Manual Setup
+
+If you prefer to configure things yourself instead of using the interactive setup:
+
+```bash
+mkdir -p ~/Projects/gms/myproject
+cp config.example.env ~/Projects/gms/myproject/config.env
+# Edit config.env with your values
+./setup.sh all ~/Projects/gms/myproject
+```
+
+See `config.example.env` for all available configuration options.
