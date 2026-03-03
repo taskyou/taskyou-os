@@ -349,6 +349,14 @@ setup_server() {
   remote "git config --global user.name '$GIT_NAME' && git config --global user.email '$GIT_EMAIL'"
   ok "git: $GIT_NAME <$GIT_EMAIL>"
 
+  # Skip Claude Code first-run onboarding (theme picker, keybinding prompt).
+  # Without this, the daemon's interactive Claude sessions get stuck on setup screens.
+  log "Pre-configuring Claude Code"
+  ssh "$SERVER_HOST" 'test -f ~/.claude.json || echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'
+  # Also skip the dangerous-mode confirmation dialog
+  ssh "$SERVER_HOST" 'mkdir -p ~/.claude && test -f ~/.claude/settings.json || echo "{\"skipDangerousModePermissionPrompt\":true}" > ~/.claude/settings.json'
+  ok "Claude Code onboarding pre-configured"
+
   # Create project repos
   log "Creating project repositories"
   IFS=',' read -ra projs <<< "$PROJECTS"

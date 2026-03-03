@@ -184,6 +184,13 @@ ssh <HOST> 'curl -fsSL taskyou.dev/install.sh | bash'
 
 After installing, **verify everything worked** by re-running the checks. If something failed, diagnose and retry.
 
+### Skip Claude Code first-run setup screens
+Claude Code shows interactive setup screens (theme picker, keybinding prompt) on first run. These would freeze the daemon. Pre-configure them:
+```bash
+ssh <HOST> 'test -f ~/.claude.json || echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'
+ssh <HOST> 'mkdir -p ~/.claude && test -f ~/.claude/settings.json || echo "{\"skipDangerousModePermissionPrompt\":true}" > ~/.claude/settings.json'
+```
+
 ### Claude authentication — transfer from local machine
 Check if Claude is already authenticated on the server:
 ```bash
@@ -387,9 +394,10 @@ Diagnose and fix issues yourself when possible:
 
 - **Agent engine not running:** `ssh <HOST> 'nohup ~/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'`
 - **Agent engine running without --dangerous:** `ssh <HOST> 'pkill -f "ty daemon"; sleep 1; nohup ~/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'`
-- **Tasks immediately stuck/blocked:** Could be two things:
+- **Tasks immediately stuck/blocked:** Could be three things:
   1. The daemon isn't in `--dangerous` mode. Check with `ssh <HOST> 'pgrep -af "ty daemon"'` — the output must include `--dangerous`
-  2. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. Fix by running: `ssh <HOST> 'cd ~/projects/<workspace> && claude --dangerously-skip-permissions -p "ok" --output-format text'`
+  2. Claude first-run setup screens (theme picker, keybinding prompt) are blocking. Fix: `ssh <HOST> 'echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'`
+  3. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. Fix by running: `ssh <HOST> 'cd ~/projects/<workspace> && claude --dangerously-skip-permissions -p "ok" --output-format text'`
 - **Tasks stuck for other reasons:** `ssh <HOST> 'tmux capture-pane -t task-<ID> -p'` — look for auth errors, rate limits, or network issues
 - **Menu bar not updating:** Check SwiftBar is running and the plugin is in `~/Library/Application Support/SwiftBar/`
 - **Node not found:** Templates hardcode a PATH — check where node is: `ssh <HOST> 'which node'` and update rendered templates if needed
