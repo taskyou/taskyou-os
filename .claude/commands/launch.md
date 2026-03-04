@@ -313,7 +313,7 @@ Tell the user: "I've added a shortcut so you can launch your GM by typing `<GM_A
 
 ### Add GitHub remotes AUTOMATICALLY (only if GITHUB_REPOS was set):
 ```bash
-ssh <HOST> 'cd ~/projects/<workspace> && git remote add origin git@github.com:<org>/<repo>.git'
+ssh <HOST> 'cd ~/projects/<workspace> && git remote add origin https://github.com/<org>/<repo>.git'
 ```
 
 ---

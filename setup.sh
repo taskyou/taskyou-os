@@ -513,7 +513,7 @@ print_checklist() {
     for mapping in "${mappings[@]}"; do
       local proj="${mapping%%:*}"
       local repo="${mapping#*:}"
-      echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin git@github.com:$repo.git'"
+      echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git'"
     done
     echo ""
   fi

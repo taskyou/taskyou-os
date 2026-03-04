@@ -70,7 +70,7 @@ ssh {{SERVER_HOST}} "{{SERVER_HOME}}/.local/bin/ty daemon stop"
 - Git identity is configured as `{{GIT_NAME}} <{{GIT_EMAIL}}>` — if this gets lost, the daemon can't create worktrees
 - When sending input to a stuck agent prompt: `ty input <id> --key Down` and `ty input <id> --enter`
 
-**Server project paths:** Each project is a git repo at `{{SERVER_HOME}}/projects/<project>/`. Task worktrees live at `{{SERVER_HOME}}/projects/<project>/.task-worktrees/<task-slug>/`. Git remotes use SSH aliases (e.g. `git@github-content:org/repo.git`).
+**Server project paths:** Each project is a git repo at `{{SERVER_HOME}}/projects/<project>/`. Task worktrees live at `{{SERVER_HOME}}/projects/<project>/.task-worktrees/<task-slug>/`. Git remotes use HTTPS (e.g. `https://github.com/org/repo.git`).
 
 ## TaskYou Quick Reference
 
