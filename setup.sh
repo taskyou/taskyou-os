@@ -282,6 +282,16 @@ setup_local() {
     ok "tmp/wrangler.toml"
   fi
 
+  # GM slash commands
+  log "GM commands"
+  mkdir -p "$LOCAL_PROJECT_DIR/.claude/commands"
+  for cmd_tmpl in "$TEMPLATES_DIR"/commands/*.tmpl; do
+    local cmd_name
+    cmd_name=$(basename "$cmd_tmpl" .md.tmpl)
+    render_file "$cmd_tmpl" "$LOCAL_PROJECT_DIR/.claude/commands/$cmd_name.md"
+    ok "command: /$cmd_name"
+  done
+
   # Shell alias
   log "Shell alias"
   local alias_line="alias ${GM_ALIAS}='cd ${LOCAL_PROJECT_DIR} && CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} claude'"

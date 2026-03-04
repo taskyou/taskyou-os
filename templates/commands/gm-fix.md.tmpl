@@ -1,0 +1,70 @@
+Diagnose and fix problems with the {{PROJECT_DISPLAY_NAME}} agent system.
+
+Run through each check below in order. Stop and fix the first problem you find, then continue.
+
+## 1. Check daemon status
+
+```bash
+ssh {{SERVER_HOST}} "{{SERVER_HOME}}/.local/bin/ty daemon status"
+```
+
+If the daemon is not running, restart it:
+
+```bash
+ssh {{SERVER_HOST}} "{{SERVER_HOME}}/.local/bin/ty daemon stop 2>/dev/null; sleep 1"
+ssh {{SERVER_HOST}} "tmux kill-server 2>/dev/null; sleep 1"
+ssh {{SERVER_HOST}} "nohup {{SERVER_HOME}}/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
+```
+
+Wait a few seconds, then verify:
+```bash
+ssh {{SERVER_HOST}} "{{SERVER_HOME}}/.local/bin/ty daemon status"
+```
+
+## 2. Check for stuck or blocked tasks
+
+```bash
+ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty list"
+```
+
+For any **blocked** tasks:
+- Check if the work is actually complete in the worktree (agent may have finished but failed to report)
+- If work is done: close the task with `ty close <id>`
+- If genuinely stuck: retry with `ty retry <id>`
+
+## 3. Check agent sessions
+
+```bash
+ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty sessions list"
+```
+
+Clean up stale sessions:
+```bash
+ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty sessions cleanup"
+```
+
+## 4. Capture output from stuck agents
+
+If an agent appears stuck (task is active but no progress), capture what it's doing:
+
+```bash
+ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty output <task-id>"
+```
+
+If the agent is waiting on a permission prompt, send input:
+```bash
+ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty input <task-id> --key Down && ty input <task-id> --enter"
+```
+
+## 5. Check daemon logs
+
+```bash
+ssh {{SERVER_HOST}} "tail -30 /tmp/ty-daemon.log"
+```
+
+## Report
+
+After running through the checks, report:
+- What was wrong (if anything)
+- What you fixed
+- Current system state
