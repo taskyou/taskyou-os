@@ -397,7 +397,7 @@ Diagnose and fix issues yourself when possible:
 - **Tasks immediately stuck/blocked:** Could be three things:
   1. The daemon isn't in `--dangerous` mode. Check with `ssh <HOST> 'pgrep -af "ty daemon"'` — the output must include `--dangerous`
   2. Claude first-run setup screens (theme picker, keybinding prompt) are blocking. Fix: `ssh <HOST> 'echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'`
-  3. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. Fix by running: `ssh <HOST> 'cd ~/projects/<workspace> && claude --dangerously-skip-permissions -p "ok" --output-format text'`
+  3. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. The `task.started` hook should handle this automatically. If it's not working, manually inject trust: `ssh <HOST> "python3 -c \"import json; cf='$HOME/.claude.json'; data=json.load(open(cf)); data.setdefault('projects',{}).setdefault('<WORKTREE_PATH>',{}).update({'hasTrustDialogAccepted':True,'hasCompletedProjectOnboarding':True}); json.dump(data,open(cf,'w'),indent=2)\""`
 - **Tasks stuck for other reasons:** `ssh <HOST> 'tmux capture-pane -t task-<ID> -p'` — look for auth errors, rate limits, or network issues
 - **Menu bar not updating:** Check SwiftBar is running and the plugin is in `~/Library/Application Support/SwiftBar/`
 - **Node not found:** Templates hardcode a PATH — check where node is: `ssh <HOST> 'which node'` and update rendered templates if needed

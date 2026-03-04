@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# TaskYou hook: fires when a task starts executing
+# Pre-accepts Claude trust dialog for the worktree directory so agents
+# don't get stuck on interactive prompts.
+
+CLAUDE_JSON="$HOME/.claude.json"
+WORKTREE_PATH="${WORKTREE_PATH:-}"
+
+[[ -z "$WORKTREE_PATH" ]] && exit 0
+[[ ! -f "$CLAUDE_JSON" ]] && exit 0
+
+# Quick check: if this path is already trusted, skip
+grep -q "\"$WORKTREE_PATH\"" "$CLAUDE_JSON" 2>/dev/null && exit 0
+
+# Inject trust — use jq if available, fall back to sed
+if command -v jq &>/dev/null; then
+  tmp=$(mktemp)
+  jq --arg p "$WORKTREE_PATH" '.projects[$p] = (.projects[$p] // {} | .hasTrustDialogAccepted = true | .hasCompletedProjectOnboarding = true)' "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
+else
+  # Minimal sed: insert trust entry before the closing brace of "projects"
+  # This is a fallback — jq is strongly preferred
+  sed -i 's|"projects": {|"projects": {\n    "'"$WORKTREE_PATH"'": {"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true},|' "$CLAUDE_JSON"
+fi

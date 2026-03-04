@@ -387,16 +387,18 @@ setup_server() {
     ssh "$SERVER_HOST" "cat > $repo_path/CLAUDE.md" <<< "$rendered"
     remote "cd $repo_path && git add CLAUDE.md && git diff --cached --quiet || git commit -q -m 'Add base CLAUDE.md'" 2>/dev/null || true
 
-    # Pre-accept Claude trust/permissions dialogs for this workspace.
-    # Without this, the daemon's first interactive Claude session would show
-    # trust and bypass-permissions dialogs that can't be answered, causing
-    # an infinite kill/retry loop.
-    log "  Warming up Claude for $proj"
-    if ssh "$SERVER_HOST" "cd $repo_path && timeout 30 claude --dangerously-skip-permissions -p 'respond with OK' --output-format text" >/dev/null 2>&1; then
-      ok "  Claude pre-authorized for $proj"
-    else
-      warn "  Claude warm-up failed for $proj — first task may need manual intervention"
-    fi
+    # Pre-accept Claude trust for this project root.
+    # The task.started hook handles worktree paths dynamically.
+    ssh "$SERVER_HOST" "python3 -c \"
+import json
+cf = '$HOME/.claude.json'
+with open(cf) as f: data = json.load(f)
+p = data.setdefault('projects', {}).setdefault('$repo_path', {})
+p['hasTrustDialogAccepted'] = True
+p['hasCompletedProjectOnboarding'] = True
+with open(cf, 'w') as f: json.dump(data, f, indent=2)
+\""
+    ok "  Claude pre-authorized for $proj"
   done
 
   # Install TaskYou hooks
