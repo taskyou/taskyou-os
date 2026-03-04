@@ -399,6 +399,14 @@ p['hasCompletedProjectOnboarding'] = True
 with open(cf, 'w') as f: json.dump(data, f, indent=2)
 \""
     ok "  Claude pre-authorized for $proj"
+
+    # Register project with TaskYou
+    if remote_with_path "ty projects show $proj" >/dev/null 2>&1; then
+      ok "  ty project $proj (already registered)"
+    else
+      remote_with_path "ty projects create $proj --path $repo_path"
+      ok "  ty project $proj registered"
+    fi
   done
 
   # Install TaskYou hooks
