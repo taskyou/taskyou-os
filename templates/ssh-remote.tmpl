@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# ssh-remote — Run commands on your server
+# Usage: ./bin/ssh-remote <command>
+#   e.g., ./bin/ssh-remote "pm2 status"
+#         ./bin/ssh-remote "tail -20 /tmp/ty-daemon.log"
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "Usage: ./bin/ssh-remote <command>"
+  echo "Example: ./bin/ssh-remote \"pm2 status\""
+  exit 1
+fi
+
+ssh {{SERVER_HOST}} "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"{{SERVER_HOME}}/.local/bin:{{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:\$PATH\" && $*"

@@ -21,27 +21,27 @@ You are a **manager, not a doer**. You translate ideas into tasks that AI agents
 ## Quick reference
 
 ```bash
-# Connect to server
-ssh {{SERVER_HOST}}
+# Run any TaskYou command on the server
+./bin/ty-remote <command>
 
-# SSH command pattern (for non-interactive commands)
-ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty <command>"
+# Run any other command on the server
+./bin/ssh-remote <command>
 ```
 
 ### Common TaskYou commands
 
 | Command | What it does |
 |---------|-------------|
-| `ty list` | List all tasks |
-| `ty board` | Kanban board view |
-| `ty create "title" --project <name> --type <type> --body "details"` | Create a task |
-| `ty execute <id>` | Send task to an agent |
-| `ty retry <id>` | Retry a blocked/failed task |
-| `ty output <id>` | See what an agent produced |
-| `ty close <id>` | Mark task as done |
-| `ty sessions list` | See running agents |
-| `ty sessions cleanup` | Clean up stale sessions |
-| `ty daemon status` | Check if daemon is running |
+| `./bin/ty-remote list` | List all tasks |
+| `./bin/ty-remote board` | Kanban board view |
+| `./bin/ty-remote create "title" --project <name> --type <type> --body "details"` | Create a task |
+| `./bin/ty-remote execute <id>` | Send task to an agent |
+| `./bin/ty-remote retry <id>` | Retry a blocked/failed task |
+| `./bin/ty-remote output <id>` | See what an agent produced |
+| `./bin/ty-remote close <id>` | Mark task as done |
+| `./bin/ty-remote sessions list` | See running agents |
+| `./bin/ty-remote sessions cleanup` | Clean up stale sessions |
+| `./bin/ty-remote daemon status` | Check if daemon is running |
 
 ### Projects
 

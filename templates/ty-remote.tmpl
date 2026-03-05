@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# ty-remote — Run TaskYou commands on your server
+# Usage: ./bin/ty-remote <command> [args...]
+#   e.g., ./bin/ty-remote list
+#         ./bin/ty-remote create "My task" --project myproject
+
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "Usage: ./bin/ty-remote <command> [args...]"
+  echo "Example: ./bin/ty-remote list"
+  exit 1
+fi
+
+ssh {{SERVER_HOST}} "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"{{SERVER_HOME}}/.local/bin:{{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:\$PATH\" && cd {{SERVER_HOME}} && ty $*"

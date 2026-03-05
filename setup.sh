@@ -205,6 +205,7 @@ export PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS SERVER_HOST SERVER_USER SERVER
 export PROJECTS LOCAL_PROJECT_DIR CLAUDE_CONFIG_DIR GIT_NAME GIT_EMAIL
 export PROJECT_NAME_UPPER
 export PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION:-}"
+export OWNER_NAME="${OWNER_NAME:-the owner}"
 export LINEAR_ENABLED="${LINEAR_ENABLED:-false}"
 export LINEAR_API_KEY="${LINEAR_API_KEY:-}"
 export LINEAR_TEAM_ID="${LINEAR_TEAM_ID:-}"
@@ -248,6 +249,14 @@ setup_local() {
 
   # bin/ scripts
   log "Generating bin/ scripts"
+
+  render_file "$TEMPLATES_DIR/ty-remote.tmpl" "$LOCAL_PROJECT_DIR/bin/ty-remote"
+  chmod +x "$LOCAL_PROJECT_DIR/bin/ty-remote"
+  ok "bin/ty-remote"
+
+  render_file "$TEMPLATES_DIR/ssh-remote.tmpl" "$LOCAL_PROJECT_DIR/bin/ssh-remote"
+  chmod +x "$LOCAL_PROJECT_DIR/bin/ssh-remote"
+  ok "bin/ssh-remote"
 
   render_file "$TEMPLATES_DIR/gm-action.tmpl" "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-action"
   chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-action"

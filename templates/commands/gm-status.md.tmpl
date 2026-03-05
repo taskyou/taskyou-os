@@ -4,17 +4,17 @@ Check the current state of {{PROJECT_DISPLAY_NAME}} operations.
 
 1. **Check daemon status:**
 ```bash
-ssh {{SERVER_HOST}} "{{SERVER_HOME}}/.local/bin/ty daemon status"
+./bin/ty-remote daemon status
 ```
 
 2. **List all tasks:**
 ```bash
-ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty list"
+./bin/ty-remote list
 ```
 
 3. **Check running agent sessions:**
 ```bash
-ssh {{SERVER_HOST}} "export PATH={{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && ty sessions list"
+./bin/ty-remote sessions list
 ```
 
 ## How to report
