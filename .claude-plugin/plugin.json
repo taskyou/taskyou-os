@@ -7,5 +7,7 @@
   },
   "homepage": "https://github.com/taskyou/taskyou-os",
   "repository": "https://github.com/taskyou/taskyou-os",
+  "license": "MIT",
+  "keywords": ["agents", "automation", "taskyou", "remote", "productivity"],
   "commands": "./.claude/commands"
 }
