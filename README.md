@@ -49,6 +49,37 @@ Your Mac                          Server
 - Get notified when tasks finish or need your attention
 - Optional menu bar widget shows live agent status
 
+## exe.dev Deployment (No Local Machine Required)
+
+Instead of running the GM on your Mac over SSH, you can deploy it entirely onto an [exe.dev](https://exe.dev) VM. This gives you a web-accessible GM with:
+
+- A **landing page** with a live kanban board
+- A **one-click terminal** button that opens the GM in your browser
+- No local machine required — access from anywhere
+
+```
+Browser                           exe.dev VM
+┌──────────────┐                  ┌──────────────────┐
+│ Landing page │ ──── HTTPS ───→  │ nginx (port 8000)│
+│ (kanban)     │ ← board.json ──  │                  │
+│              │                  │ TaskYou daemon   │
+│ GM Terminal  │ ──── xterm ───→  │ ┌──────────────┐ │
+│ (browser)    │                  │ │ Agent 1      │ │
+│              │                  │ │ Agent 2      │ │
+│              │                  │ │ ...          │ │
+│              │                  │ └──────────────┘ │
+└──────────────┘                  └──────────────────┘
+```
+
+To deploy:
+
+```bash
+# Set EXE_DEV_VM_NAME in your config.env, then:
+./setup.sh exe ~/Projects/gms/myproject
+```
+
+This creates the VM, uploads everything, and prints the URL. Share access with teammates via `ssh exe.dev share add <vm> user@example.com`.
+
 ## Optional Integrations
 
 - **Linear** — Escalate tasks that need human attention to your Linear board
@@ -66,5 +97,7 @@ cp config.example.env ~/Projects/gms/myproject/config.env
 # Edit config.env with your values
 ./setup.sh all ~/Projects/gms/myproject
 ```
+
+Modes: `local` (Mac only), `server` (remote server only), `exe` (exe.dev VM), `all` (local + server).
 
 See `config.example.env` for all available configuration options.
