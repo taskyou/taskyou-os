@@ -1,0 +1,7 @@
+#!/bin/bash
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+while true; do
+  ty board --json --limit 20 > /var/www/html/board.json.tmp 2>/dev/null && \
+    mv /var/www/html/board.json.tmp /var/www/html/board.json
+  sleep 10
+done
