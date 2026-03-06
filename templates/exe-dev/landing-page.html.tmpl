@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{PROJECT_DISPLAY_NAME}} GM</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f1117;
+      color: #c9d1d9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    .header {
+      padding: 32px 40px 24px;
+      border-bottom: 1px solid #21262d;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #f0f6fc;
+      margin-bottom: 8px;
+    }
+    .header p {
+      color: #8b949e;
+      font-size: 14px;
+      max-width: 600px;
+      line-height: 1.5;
+    }
+
+    .actions {
+      padding: 24px 40px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: #238636;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-secondary {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+    }
+    .btn-secondary:hover { background: #30363d; }
+
+    .board-section {
+      padding: 24px 40px;
+    }
+    .board-section h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f0f6fc;
+      margin-bottom: 16px;
+    }
+    .board {
+      display: flex;
+      gap: 16px;
+      overflow-x: auto;
+      padding-bottom: 16px;
+    }
+    .column {
+      min-width: 260px;
+      max-width: 300px;
+      flex: 1;
+      background: #161b22;
+      border-radius: 8px;
+      border: 1px solid #21262d;
+    }
+    .column-header {
+      padding: 12px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #21262d;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .column-header .count {
+      background: #30363d;
+      color: #8b949e;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+    .column-body {
+      padding: 8px;
+      min-height: 60px;
+    }
+    .card {
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .card .title { color: #f0f6fc; font-weight: 500; }
+    .card .meta {
+      color: #484f58;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+    .card .project {
+      display: inline-block;
+      background: #1f2937;
+      color: #7ee787;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .empty-col {
+      color: #484f58;
+      font-size: 12px;
+      text-align: center;
+      padding: 16px 8px;
+    }
+    .board-error {
+      color: #484f58;
+      font-size: 13px;
+      padding: 20px 0;
+    }
+    .last-updated {
+      color: #484f58;
+      font-size: 11px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>{{PROJECT_DISPLAY_NAME}} GM</h1>
+    <p>{{PROJECT_DESCRIPTION}}</p>
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-primary" href="https://{{EXE_DEV_VM_NAME}}.xterm.exe.xyz/?name=gm" target="_blank">Open GM Terminal</a>
+    <a class="btn btn-secondary" href="https://{{EXE_DEV_VM_NAME}}.xterm.exe.xyz/" target="_blank">Open Shell</a>
+  </div>
+
+  <div class="board-section">
+    <h2>Task Board</h2>
+    <div id="board" class="board">
+      <div class="board-error">Loading board...</div>
+    </div>
+    <div id="last-updated" class="last-updated"></div>
+  </div>
+
+  <script>
+    const COLUMNS = ['todo', 'in_progress', 'blocked', 'done'];
+    const LABELS = { todo: 'To Do', in_progress: 'In Progress', blocked: 'Blocked', done: 'Done' };
+
+    function renderBoard(tasks) {
+      const board = document.getElementById('board');
+      if (!tasks || tasks.length === 0) {
+        board.innerHTML = '<div class="board-error">No tasks yet.</div>';
+        return;
+      }
+
+      const grouped = {};
+      COLUMNS.forEach(c => grouped[c] = []);
+      tasks.forEach(t => {
+        const col = grouped[t.status] || grouped['todo'];
+        col.push(t);
+      });
+
+      board.innerHTML = COLUMNS.map(col => {
+        const items = grouped[col];
+        const cards = items.length > 0
+          ? items.map(t =>
+              '<div class="card">' +
+                '<div class="title">' + escapeHtml(t.title || t.name || 'Untitled') + '</div>' +
+                '<div class="meta">' +
+                  (t.project ? '<span class="project">' + escapeHtml(t.project) + '</span> ' : '') +
+                  (t.id ? '#' + t.id : '') +
+                '</div>' +
+              '</div>'
+            ).join('')
+          : '<div class="empty-col">No tasks</div>';
+
+        return '<div class="column">' +
+          '<div class="column-header">' + LABELS[col] + ' <span class="count">' + items.length + '</span></div>' +
+          '<div class="column-body">' + cards + '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function escapeHtml(str) {
+      var d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function updateTimestamp() {
+      document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+    }
+
+    async function fetchBoard() {
+      try {
+        var res = await fetch('/board.json?_=' + Date.now());
+        if (!res.ok) throw new Error('Not found');
+        var data = await res.json();
+        var tasks = Array.isArray(data) ? data : (data.tasks || []);
+        renderBoard(tasks);
+        updateTimestamp();
+      } catch (e) {
+        // Keep existing board content on fetch error, just update timestamp
+        var board = document.getElementById('board');
+        if (board.querySelector('.board-error')) {
+          board.innerHTML = '<div class="board-error">Board data not available yet. Waiting for first refresh...</div>';
+        }
+      }
+    }
+
+    fetchBoard();
+    setInterval(fetchBoard, 10000);
+  </script>
+</body>
+</html>

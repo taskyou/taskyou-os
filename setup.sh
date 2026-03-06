@@ -18,6 +18,7 @@ usage() {
   echo "Modes:"
   echo "  local   — Generate local GM files only"
   echo "  server  — Provision the remote server only"
+  echo "  exe     — Deploy GM to an exe.dev VM"
   echo "  all     — Both local and server"
   echo ""
   echo "The project-dir must contain a config.env file."
@@ -175,8 +176,8 @@ MODE="$1"
 PROJECT_DIR="$(cd "$2" && pwd 2>/dev/null || echo "$2")"
 CONFIG_FILE="$PROJECT_DIR/config.env"
 
-if [[ "$MODE" != "local" && "$MODE" != "server" && "$MODE" != "all" ]]; then
-  echo "Error: mode must be local, server, or all"
+if [[ "$MODE" != "local" && "$MODE" != "server" && "$MODE" != "exe" && "$MODE" != "all" ]]; then
+  echo "Error: mode must be local, server, exe, or all"
   usage
 fi
 
@@ -192,7 +193,13 @@ fi
 source "$CONFIG_FILE"
 
 # Validate required vars
-for var in PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS SERVER_HOST SERVER_USER SERVER_HOME PROJECTS LOCAL_PROJECT_DIR CLAUDE_CONFIG_DIR GIT_NAME GIT_EMAIL; do
+REQUIRED_VARS="PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS PROJECTS GIT_NAME GIT_EMAIL"
+if [[ "$MODE" == "exe" ]]; then
+  REQUIRED_VARS="$REQUIRED_VARS EXE_DEV_VM_NAME"
+else
+  REQUIRED_VARS="$REQUIRED_VARS SERVER_HOST SERVER_USER SERVER_HOME LOCAL_PROJECT_DIR CLAUDE_CONFIG_DIR"
+fi
+for var in $REQUIRED_VARS; do
   if [[ -z "${!var:-}" ]]; then
     echo "Error: $var is required in config.env"
     exit 1
@@ -201,8 +208,9 @@ done
 
 # Derived variables
 PROJECT_NAME_UPPER=$(echo "$PROJECT_NAME" | tr '[:lower:]' '[:upper:]')
-export PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS SERVER_HOST SERVER_USER SERVER_HOME
-export PROJECTS LOCAL_PROJECT_DIR CLAUDE_CONFIG_DIR GIT_NAME GIT_EMAIL
+export PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS GIT_NAME GIT_EMAIL PROJECTS
+export SERVER_HOST="${SERVER_HOST:-}" SERVER_USER="${SERVER_USER:-}" SERVER_HOME="${SERVER_HOME:-}"
+export LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-}" CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-}"
 export PROJECT_NAME_UPPER
 export PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION:-}"
 export OWNER_NAME="${OWNER_NAME:-the owner}"
@@ -217,6 +225,8 @@ export R2_ENABLED="${R2_ENABLED:-false}"
 export R2_BUCKET="${R2_BUCKET:-}"
 export R2_PUBLIC_URL="${R2_PUBLIC_URL:-}"
 export GITHUB_REPOS="${GITHUB_REPOS:-}"
+export EXE_DEV_ENABLED="${EXE_DEV_ENABLED:-false}"
+export EXE_DEV_VM_NAME="${EXE_DEV_VM_NAME:-}"
 
 # Generate dynamic table content
 export PROJECTS_TABLE
@@ -516,6 +526,344 @@ EOF
   log "Server setup complete"
 }
 
+# ── exe.dev deployment ────────────────────────────────────────────────────────
+
+setup_exe_dev() {
+  if [[ -z "$EXE_DEV_VM_NAME" ]]; then
+    echo "Error: EXE_DEV_VM_NAME is required for exe.dev deployment"
+    echo "Set it in config.env"
+    exit 1
+  fi
+
+  local EXE_HOST="exedev@${EXE_DEV_VM_NAME}.exe.xyz"
+  local EXE_HOME="/home/exedev"
+
+  log "Deploying GM to exe.dev VM: $EXE_DEV_VM_NAME"
+
+  # Check SSH access to exe.dev management
+  if ! ssh -o ConnectTimeout=5 -o BatchMode=yes exe.dev "echo ok" >/dev/null 2>&1; then
+    echo "Error: Cannot SSH to exe.dev"
+    echo "Make sure your SSH key is registered with exe.dev."
+    echo "Visit https://exe.dev to set up your account and SSH key."
+    exit 1
+  fi
+  ok "exe.dev SSH access"
+
+  # Create or verify VM exists
+  if ssh -o ConnectTimeout=5 -o BatchMode=yes "$EXE_HOST" "echo ok" >/dev/null 2>&1; then
+    ok "VM $EXE_DEV_VM_NAME already exists"
+  else
+    log "Creating exe.dev VM: $EXE_DEV_VM_NAME"
+    ssh exe.dev "vm create $EXE_DEV_VM_NAME" || {
+      echo "Error: Failed to create VM. Create it manually at https://exe.dev"
+      exit 1
+    }
+    # Wait for VM to become available
+    echo "  Waiting for VM to be ready..."
+    for i in $(seq 1 30); do
+      if ssh -o ConnectTimeout=5 -o BatchMode=yes "$EXE_HOST" "echo ok" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    ok "VM created"
+  fi
+
+  # Helper to run commands on the exe.dev VM
+  exe_remote() {
+    ssh "$EXE_HOST" "$@"
+  }
+
+  exe_remote_with_path() {
+    ssh "$EXE_HOST" "export PATH=$EXE_HOME/bin:$EXE_HOME/.local/bin:\$PATH && $*"
+  }
+
+  # Install TaskYou
+  if exe_remote "test -f $EXE_HOME/.local/bin/ty" 2>/dev/null; then
+    ok "TaskYou already installed"
+  else
+    log "Installing TaskYou"
+    exe_remote "curl -fsSL https://taskyou.dev/install.sh | bash" || {
+      warn "TaskYou auto-install failed. Install it manually on the VM."
+      exit 1
+    }
+    ok "TaskYou installed"
+  fi
+
+  # Git identity
+  log "Configuring git identity"
+  exe_remote "git config --global user.name '$GIT_NAME' && git config --global user.email '$GIT_EMAIL'"
+  ok "git: $GIT_NAME <$GIT_EMAIL>"
+
+  # Pre-configure Claude Code (skip onboarding)
+  log "Pre-configuring Claude Code"
+  exe_remote 'test -f ~/.claude.json || echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'
+  exe_remote 'mkdir -p ~/.claude && test -f ~/.claude/settings.json || echo "{\"skipDangerousModePermissionPrompt\":true}" > ~/.claude/settings.json'
+  ok "Claude Code onboarding pre-configured"
+
+  # Create project repos
+  log "Creating project repositories"
+  IFS=',' read -ra projs <<< "$PROJECTS"
+  for proj in "${projs[@]}"; do
+    proj=$(echo "$proj" | xargs)
+    local repo_path="$EXE_HOME/projects/$proj"
+    if exe_remote "test -d $repo_path/.git" 2>/dev/null; then
+      ok "$proj (already exists)"
+    else
+      exe_remote "mkdir -p $repo_path && cd $repo_path && git init -q"
+      ok "$proj"
+    fi
+
+    # Write base CLAUDE.md into each project repo
+    local rendered
+    rendered=$(render "$(<"$TEMPLATES_DIR/project-claude-md.tmpl")")
+    ssh "$EXE_HOST" "cat > $repo_path/CLAUDE.md" <<< "$rendered"
+    exe_remote "cd $repo_path && git add CLAUDE.md && git diff --cached --quiet || git commit -q -m 'Add base CLAUDE.md'" 2>/dev/null || true
+
+    # Pre-accept Claude trust
+    ssh "$EXE_HOST" "python3 -c \"
+import json
+cf = '$HOME/.claude.json'
+with open(cf) as f: data = json.load(f)
+p = data.setdefault('projects', {}).setdefault('$repo_path', {})
+p['hasTrustDialogAccepted'] = True
+p['hasCompletedProjectOnboarding'] = True
+with open(cf, 'w') as f: json.dump(data, f, indent=2)
+\""
+    ok "  Claude pre-authorized for $proj"
+
+    # Register project with TaskYou
+    if exe_remote_with_path "ty projects show $proj" >/dev/null 2>&1; then
+      ok "  ty project $proj (already registered)"
+    else
+      exe_remote_with_path "ty projects create $proj --path $repo_path"
+      ok "  ty project $proj registered"
+    fi
+  done
+
+  # GM project directory
+  log "Setting up GM project directory"
+  exe_remote "mkdir -p $EXE_HOME/projects/gm/.claude"
+
+  # Generate server-local CLAUDE.md
+  render_file "$TEMPLATES_DIR/exe-dev/CLAUDE.md.tmpl" "/tmp/taskyou-exe-dev-claude-md"
+  scp -q "/tmp/taskyou-exe-dev-claude-md" "$EXE_HOST:$EXE_HOME/projects/gm/CLAUDE.md"
+  rm -f "/tmp/taskyou-exe-dev-claude-md"
+  ok "GM CLAUDE.md (server-local)"
+
+  # GM .claude/settings.json
+  render_file "$TEMPLATES_DIR/settings.json.tmpl" "/tmp/taskyou-exe-dev-settings"
+  scp -q "/tmp/taskyou-exe-dev-settings" "$EXE_HOST:$EXE_HOME/projects/gm/.claude/settings.json"
+  rm -f "/tmp/taskyou-exe-dev-settings"
+  ok "GM .claude/settings.json"
+
+  # Pre-accept Claude trust for GM directory
+  ssh "$EXE_HOST" "python3 -c \"
+import json
+cf = '$HOME/.claude.json'
+with open(cf) as f: data = json.load(f)
+p = data.setdefault('projects', {}).setdefault('$EXE_HOME/projects/gm', {})
+p['hasTrustDialogAccepted'] = True
+p['hasCompletedProjectOnboarding'] = True
+with open(cf, 'w') as f: json.dump(data, f, indent=2)
+\""
+  ok "Claude pre-authorized for GM"
+
+  # Init git in GM dir if needed
+  exe_remote "cd $EXE_HOME/projects/gm && test -d .git || git init -q"
+  ok "GM git repo"
+
+  # Install TaskYou hooks
+  log "Installing TaskYou hooks"
+  local hooks_dir="$EXE_HOME/.config/task/hooks"
+  exe_remote "mkdir -p $hooks_dir"
+
+  for hook_tmpl in "$TEMPLATES_DIR"/hooks/*.tmpl; do
+    local hook_name
+    hook_name=$(basename "$hook_tmpl" .tmpl)
+    local rendered
+    rendered=$(render "$(<"$hook_tmpl")")
+    ssh "$EXE_HOST" "cat > $hooks_dir/$hook_name && chmod +x $hooks_dir/$hook_name" <<< "$rendered"
+    ok "hook: $hook_name"
+  done
+
+  # Create notifications file
+  exe_remote "touch $EXE_HOME/notifications.jsonl"
+  ok "notifications.jsonl"
+
+  # GM launcher script
+  log "Setting up GM launcher"
+  exe_remote "mkdir -p $EXE_HOME/bin"
+  render_file "$TEMPLATES_DIR/exe-dev/gm-launcher.tmpl" "/tmp/taskyou-exe-dev-gm-launcher"
+  scp -q "/tmp/taskyou-exe-dev-gm-launcher" "$EXE_HOST:$EXE_HOME/bin/gm"
+  exe_remote "chmod +x $EXE_HOME/bin/gm"
+  rm -f "/tmp/taskyou-exe-dev-gm-launcher"
+  ok "bin/gm launcher"
+
+  # Bashrc auto-launch hook (idempotent)
+  log "Setting up bashrc auto-launch hook"
+  local bashrc_marker="# Auto-launch GM for xterm sessions"
+  if exe_remote "grep -q '$bashrc_marker' $EXE_HOME/.bashrc 2>/dev/null"; then
+    ok "bashrc hook (already installed)"
+  else
+    ssh "$EXE_HOST" "cat >> $EXE_HOME/.bashrc" <<'BASHRC_EOF'
+
+# Auto-launch GM for xterm sessions named gm or gm-*
+_parent_cmd=$(cat /proc/$PPID/cmdline 2>/dev/null | tr '\0' ' ')
+if [[ "$_parent_cmd" == *xterm-exe.dev-gm* ]]; then
+  exec gm
+fi
+unset _parent_cmd
+BASHRC_EOF
+    ok "bashrc hook installed"
+  fi
+
+  # Board refresh daemon
+  log "Setting up board refresh daemon"
+  render_file "$TEMPLATES_DIR/exe-dev/board-refresh.tmpl" "/tmp/taskyou-exe-dev-board-refresh"
+  scp -q "/tmp/taskyou-exe-dev-board-refresh" "$EXE_HOST:$EXE_HOME/bin/board-refresh"
+  exe_remote "chmod +x $EXE_HOME/bin/board-refresh"
+  rm -f "/tmp/taskyou-exe-dev-board-refresh"
+  ok "bin/board-refresh"
+
+  # Board refresh crontab (idempotent)
+  local cron_line="@reboot $EXE_HOME/bin/board-refresh"
+  if exe_remote "crontab -l 2>/dev/null" | grep -q "board-refresh"; then
+    ok "board-refresh cron (already installed)"
+  else
+    exe_remote "(crontab -l 2>/dev/null; echo '$cron_line') | crontab -"
+    ok "board-refresh cron installed"
+  fi
+
+  # Start board-refresh now if not running
+  if exe_remote "pgrep -f board-refresh" >/dev/null 2>&1; then
+    ok "board-refresh already running"
+  else
+    exe_remote "nohup $EXE_HOME/bin/board-refresh > /tmp/board-refresh.log 2>&1 &"
+    ok "board-refresh started"
+  fi
+
+  # Landing page
+  log "Setting up landing page"
+  exe_remote "sudo mkdir -p /var/www/html"
+  render_file "$TEMPLATES_DIR/exe-dev/landing-page.html.tmpl" "/tmp/taskyou-exe-dev-landing"
+  scp -q "/tmp/taskyou-exe-dev-landing" "$EXE_HOST:/tmp/taskyou-landing.html"
+  exe_remote "sudo mv /tmp/taskyou-landing.html /var/www/html/index.html"
+  rm -f "/tmp/taskyou-exe-dev-landing"
+  ok "landing page"
+
+  # Nginx
+  log "Setting up nginx"
+  # Ensure nginx serves on port 8000
+  exe_remote "sudo tee /etc/nginx/sites-available/default > /dev/null" <<'NGINX_EOF'
+server {
+    listen 8000 default_server;
+    root /var/www/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location /board.json {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Access-Control-Allow-Origin "*";
+    }
+}
+NGINX_EOF
+  exe_remote "sudo systemctl start nginx && sudo systemctl enable nginx" 2>/dev/null
+  exe_remote "sudo nginx -t && sudo systemctl reload nginx" 2>/dev/null
+  ok "nginx configured (port 8000)"
+
+  # Set exe.dev proxy to point at port 8000
+  ssh exe.dev "share port $EXE_DEV_VM_NAME 8000" 2>/dev/null || warn "Could not set proxy port. Run: ssh exe.dev share port $EXE_DEV_VM_NAME 8000"
+  ok "exe.dev proxy → port 8000"
+
+  # Set VM to private by default
+  ssh exe.dev "share set-private $EXE_DEV_VM_NAME" 2>/dev/null || true
+  ok "VM access set to private"
+
+  # Linear module (same as server setup)
+  if [[ "$LINEAR_ENABLED" == "true" ]]; then
+    log "Setting up Linear integration"
+
+    local cli_dir="$EXE_HOME/tools/linear-cli"
+    exe_remote "mkdir -p $cli_dir"
+    scp -q "$MODULES_DIR/linear/linear-cli/linear.mjs" "$EXE_HOST:$cli_dir/linear.mjs"
+    exe_remote "chmod +x $cli_dir/linear.mjs"
+
+    local linear_labels_json="{\"agent handoff\":\"$LINEAR_LABEL_ID\"}"
+    local linear_states_json="{\"todo\":\"$LINEAR_STATE_ID\"}"
+    ssh "$EXE_HOST" "cat > $cli_dir/.env" <<EOF
+LINEAR_TOKEN=$LINEAR_API_KEY
+LINEAR_TOKEN_AGENTS=$LINEAR_API_KEY
+LINEAR_TEAM_ID=$LINEAR_TEAM_ID
+LINEAR_TEAM_KEY=$LINEAR_TEAM_KEY
+LINEAR_LABELS=$linear_labels_json
+LINEAR_STATES=$linear_states_json
+EOF
+    ok "Linear CLI installed"
+
+    exe_remote "ln -sf $cli_dir/linear.mjs $EXE_HOME/bin/linear"
+    ok "linear → ~/bin/linear"
+
+    local scripts_dir="$EXE_HOME/scripts"
+    exe_remote "mkdir -p $scripts_dir"
+    scp -q "$MODULES_DIR/linear/linear-poll.mjs" "$EXE_HOST:$scripts_dir/linear-poll.mjs"
+    exe_remote "chmod +x $scripts_dir/linear-poll.mjs"
+
+    local label_map_json="{"
+    IFS=',' read -ra projs <<< "$PROJECTS"
+    local first=true
+    for proj in "${projs[@]}"; do
+      proj=$(echo "$proj" | xargs)
+      if $first; then first=false; else label_map_json+=","; fi
+      label_map_json+="\"$proj\":\"$proj\""
+    done
+    label_map_json+="}"
+
+    ssh "$EXE_HOST" "cat > $scripts_dir/.env" <<EOF
+LINEAR_TOKEN=$LINEAR_API_KEY
+LINEAR_CLI=$EXE_HOME/bin/linear
+TY_PATH=$EXE_HOME/.local/bin/ty
+LABEL_PROJECT_MAP=$label_map_json
+DEFAULT_PROJECT=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
+EOF
+    ok "Linear poll script installed"
+
+    local cron_line_linear="*/2 * * * * export PATH=$EXE_HOME/.local/bin:$EXE_HOME/bin:\$PATH && node $scripts_dir/linear-poll.mjs >> $scripts_dir/linear-poll.log 2>&1"
+    if exe_remote "crontab -l 2>/dev/null" | grep -q "linear-poll.mjs"; then
+      ok "Linear cron job already exists"
+    else
+      exe_remote "(crontab -l 2>/dev/null; echo '$cron_line_linear') | crontab -"
+      ok "Linear cron job installed"
+    fi
+  fi
+
+  # Start TaskYou daemon
+  log "Starting TaskYou daemon"
+  if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
+    ok "Daemon already running"
+  else
+    exe_remote "nohup $EXE_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
+    sleep 2
+    if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
+      ok "Daemon started"
+    else
+      warn "Daemon may not have started. Check with: ssh $EXE_HOST 'ty daemon status'"
+    fi
+  fi
+
+  log "exe.dev deployment complete!"
+  echo ""
+  echo "  Landing page:  https://${EXE_DEV_VM_NAME}.exe.xyz"
+  echo "  GM terminal:   https://${EXE_DEV_VM_NAME}.xterm.exe.xyz/?name=gm"
+  echo "  Shell:         https://${EXE_DEV_VM_NAME}.xterm.exe.xyz/"
+  echo ""
+  echo "  Share access:  ssh exe.dev share add $EXE_DEV_VM_NAME user@example.com"
+  echo ""
+}
+
 # ── Manual steps checklist ───────────────────────────────────────────────────
 
 print_checklist() {
@@ -564,6 +912,9 @@ case "$MODE" in
   server)
     setup_server
     print_checklist
+    ;;
+  exe)
+    setup_exe_dev
     ;;
   all)
     setup_local
