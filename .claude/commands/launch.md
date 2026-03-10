@@ -269,7 +269,7 @@ mkdir -p ~/Projects/gms/<PROJECT_NAME>
 ### Generate config.env:
 Read `config.example.env` from the taskyou-os repo to get the exact format. Write the config.env file to `~/Projects/gms/<PROJECT_NAME>/config.env` with all collected values filled in.
 
-SERVER_HOST should be the full connection string (e.g. `exedev@msp-realestate-agents.exe.xyz`).
+SERVER_HOST should be the full connection string (e.g. `exedev@myproject-agents.exe.xyz`).
 
 If GitHub was not chosen, leave GITHUB_REPOS commented out.
 
