@@ -20,7 +20,7 @@ This is the TaskYouOS template repo. It generates fully working AI agent managem
 
 - Templates are the source of truth. Never edit generated output — edit the template.
 - Test changes by running `./setup.sh local /tmp/test-project` with a test config.env.
-- The existing InfluenceKit GM at `~/Projects/gms/influencekit/` is the reference implementation.
+- If you have an existing GM at `~/Projects/gms/<name>/`, use it as a reference implementation.
 
 ## Adding New Templates
 
