@@ -1,6 +1,16 @@
-Diagnose and fix problems with the {{PROJECT_DISPLAY_NAME}} agent system.
+---
+name: gm-fix
+description: Diagnose and fix problems with the agent system
+---
+
+Diagnose and fix problems with the agent system.
 
 Run through each check below in order. Stop and fix the first problem you find, then continue.
+
+First, load the project configuration:
+```bash
+source ./config.env
+```
 
 ## 1. Check daemon status
 
@@ -11,9 +21,9 @@ Run through each check below in order. Stop and fix the first problem you find, 
 If the daemon is not running, restart it:
 
 ```bash
-./bin/ssh-remote "{{SERVER_HOME}}/.local/bin/ty daemon stop 2>/dev/null; sleep 1"
+./bin/ssh-remote "$SERVER_HOME/.local/bin/ty daemon stop 2>/dev/null; sleep 1"
 ./bin/ssh-remote "tmux kill-server 2>/dev/null; sleep 1"
-./bin/ssh-remote "nohup {{SERVER_HOME}}/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
+./bin/ssh-remote "nohup $SERVER_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
 ```
 
 Wait a few seconds, then verify:

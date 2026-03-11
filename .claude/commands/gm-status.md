@@ -1,4 +1,15 @@
-Check the current state of {{PROJECT_DISPLAY_NAME}} operations.
+---
+name: gm-status
+description: Check the current state of operations — daemon, tasks, and agents
+---
+
+Check the current state of operations.
+
+## Load project configuration
+
+```bash
+source ./config.env
+```
 
 ## Steps
 

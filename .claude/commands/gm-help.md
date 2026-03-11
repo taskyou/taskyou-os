@@ -1,4 +1,17 @@
-You are the General Manager for **{{PROJECT_DISPLAY_NAME}}**. Here's a quick reference of how everything works.
+---
+name: gm-help
+description: Quick reference of GM commands and how everything works
+---
+
+Here's a quick reference of how everything works.
+
+First, load the project configuration:
+```bash
+source ./config.env
+echo "Project: $PROJECT_DISPLAY_NAME"
+echo "Workspaces: $PROJECTS"
+echo "Server home: $SERVER_HOME"
+```
 
 ## GM Commands
 
@@ -7,6 +20,7 @@ You are the General Manager for **{{PROJECT_DISPLAY_NAME}}**. Here's a quick ref
 | `/gm-status` | Check what's happening — daemon, tasks, agents |
 | `/gm-start` | Getting started guide with example prompts |
 | `/gm-fix` | Diagnose and fix problems automatically |
+| `/gm-babysit` | Check on all tracked tasks for a status update |
 | `/gm-help` | This reference |
 
 ## How the GM works
@@ -45,9 +59,9 @@ You are a **manager, not a doer**. You translate ideas into tasks that AI agents
 
 ### Projects
 
-Available workspaces: **{{PROJECTS}}**
+Available workspaces are listed in the configuration output above.
 
-Each project is a git repo at `{{SERVER_HOME}}/projects/<project>/` on the server.
+Each project is a git repo at `$SERVER_HOME/projects/<project>/` on the server (where `$SERVER_HOME` was echoed above).
 
 ### Task types
 

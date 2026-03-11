@@ -1,7 +1,7 @@
 {
   "name": "taskyou-os",
   "description": "Launch and manage AI agent teams on remote servers. Interactive setup walks you through everything — server provisioning, configuration, and deployment.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "TaskYou"
   },
