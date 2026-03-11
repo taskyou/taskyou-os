@@ -490,7 +490,7 @@ setup_server() {
     # The task.started hook handles worktree paths dynamically.
     ssh "$SERVER_HOST" "python3 -c \"
 import json
-cf = '$HOME/.claude.json'
+cf = '$SERVER_HOME/.claude.json'
 with open(cf) as f: data = json.load(f)
 p = data.setdefault('projects', {}).setdefault('$repo_path', {})
 p['hasTrustDialogAccepted'] = True
@@ -634,7 +634,7 @@ setup_exe_dev() {
   log "Deploying GM to exe.dev VM: $EXE_DEV_VM_NAME"
 
   # Check SSH access to exe.dev management
-  if ! ssh -o ConnectTimeout=5 -o BatchMode=yes exe.dev "echo ok" >/dev/null 2>&1; then
+  if ! ssh -o ConnectTimeout=5 -o BatchMode=yes exe.dev </dev/null >/dev/null 2>&1; then
     echo "Error: Cannot SSH to exe.dev"
     echo "Make sure your SSH key is registered with exe.dev."
     echo "Visit https://exe.dev to set up your account and SSH key."
@@ -716,7 +716,7 @@ setup_exe_dev() {
     # Pre-accept Claude trust
     ssh "$EXE_HOST" "python3 -c \"
 import json
-cf = '$HOME/.claude.json'
+cf = '$EXE_HOME/.claude.json'
 with open(cf) as f: data = json.load(f)
 p = data.setdefault('projects', {}).setdefault('$repo_path', {})
 p['hasTrustDialogAccepted'] = True
@@ -753,7 +753,7 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
   # Pre-accept Claude trust for GM directory
   ssh "$EXE_HOST" "python3 -c \"
 import json
-cf = '$HOME/.claude.json'
+cf = '$EXE_HOME/.claude.json'
 with open(cf) as f: data = json.load(f)
 p = data.setdefault('projects', {}).setdefault('$EXE_HOME/projects/gm', {})
 p['hasTrustDialogAccepted'] = True
