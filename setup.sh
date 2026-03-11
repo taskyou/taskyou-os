@@ -227,6 +227,27 @@ export R2_PUBLIC_URL="${R2_PUBLIC_URL:-}"
 export GITHUB_REPOS="${GITHUB_REPOS:-}"
 export EXE_DEV_ENABLED="${EXE_DEV_ENABLED:-false}"
 export EXE_DEV_VM_NAME="${EXE_DEV_VM_NAME:-}"
+export NONO_ENABLED="${NONO_ENABLED:-false}"
+export NONO_CREDENTIALS="${NONO_CREDENTIALS:-}"
+export NONO_PROXY_HOSTS="${NONO_PROXY_HOSTS:-}"
+
+# Generate nono proxy flags for wrapper scripts
+if [[ "$NONO_ENABLED" == "true" && -n "$NONO_PROXY_HOSTS" ]]; then
+  NONO_PROXY_FLAGS=""
+  IFS=',' read -ra hosts <<< "$NONO_PROXY_HOSTS"
+  for host in "${hosts[@]}"; do
+    host=$(echo "$host" | xargs)
+    NONO_PROXY_FLAGS+="--proxy-allow $host "
+  done
+  IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
+  for cred in "${creds[@]}"; do
+    name=$(echo "$cred" | cut -d: -f1 | xargs)
+    NONO_PROXY_FLAGS+="--proxy-credential $name "
+  done
+  export NONO_PROXY_FLAGS
+else
+  export NONO_PROXY_FLAGS=""
+fi
 
 # Generate dynamic table content
 export PROJECTS_TABLE
