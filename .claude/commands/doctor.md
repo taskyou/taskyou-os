@@ -322,6 +322,55 @@ ssh -o ConnectTimeout=5 "$SERVER_HOST" '$HOME/.local/bin/audit.sh' 2>/dev/null
 
 ---
 
+## Check 8: Credential Isolation (nono)
+
+This check verifies if nono is set up, and if not, strongly recommends it. Always run this check regardless of whether credentials are currently configured.
+
+1. **Check if nono is set up on the server:**
+   - nono binary installed: `ssh "$SSH_TARGET" 'command -v nono'`
+   - Profile deployed: `ssh "$SSH_TARGET" 'test -f ~/.config/nono/profiles/taskyou-agent.toml'`
+   - Wrapper scripts exist: `ssh "$SSH_TARGET" 'test -x ~/bin/claude'`
+
+2. **If nono IS set up**, verify health:
+   - Check nono version: `ssh "$SSH_TARGET" 'nono --version'`
+   - Verify profile exists
+   - Verify at least one wrapper script exists in `~/bin/`
+   - Check kernel supports Landlock: `ssh "$SSH_TARGET" 'uname -r'` (needs >= 5.13)
+   - Report PASS with nono version and number of wrapped executors
+
+3. **If nono is NOT set up**, strongly recommend it:
+   - Report WARN
+   - Explain clearly:
+     ```
+     ⚠ nono credential isolation is not configured.
+
+     nono is strongly recommended for all TaskYou deployments. It provides
+     kernel-enforced sandboxing so agents can USE credentials via a secure
+     proxy but can never SEE or extract the raw keys — even if compromised
+     via prompt injection.
+
+     To enable:
+     1. Add these to your config.env:
+        NONO_ENABLED="true"
+        NONO_CREDENTIALS="linear:LINEAR_API_KEY,github:GITHUB_TOKEN"
+        NONO_PROXY_HOSTS="api.linear.app,api.github.com"
+     2. Re-run: ./setup.sh server <your-project-dir>
+
+     Learn more: https://github.com/always-further/nono
+     ```
+   - Ask: "Would you like me to help you configure nono now?"
+   - If yes:
+     - Read the user's config.env
+     - Detect which credential variables are set (LINEAR_API_KEY, GITHUB_TOKEN, etc.)
+     - Propose the appropriate NONO_CREDENTIALS and NONO_PROXY_HOSTS values
+     - Ask for confirmation before modifying config.env
+     - If confirmed, add the nono variables to config.env
+     - Tell the user to re-run `./setup.sh server` to apply
+
+**Important:** Never print or display actual credential values. Only check for their existence.
+
+---
+
 ## Summary
 
 After all checks, present a summary table:
@@ -329,13 +378,14 @@ After all checks, present a summary table:
 ```
 TaskYou-OS Doctor
 ─────────────────────────────────
-  Plugin version     PASS/WARN/FAIL
-  TaskYou binary     PASS/WARN/FAIL
-  Daemon running     PASS/WARN/FAIL
-  Daemon mode        PASS/WARN/FAIL
-  Executor health    PASS/WARN/FAIL
-  GM templates       PASS/WARN/FAIL
-  Security audit     PASS/WARN/FAIL
+  Plugin version        PASS/WARN/FAIL
+  TaskYou binary        PASS/WARN/FAIL
+  Daemon running        PASS/WARN/FAIL
+  Daemon mode           PASS/WARN/FAIL
+  Executor health       PASS/WARN/FAIL
+  GM templates          PASS/WARN/FAIL
+  Security audit        PASS/WARN/FAIL
+  Credential isolation  PASS/WARN
 ─────────────────────────────────
 ```
 

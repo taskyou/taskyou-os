@@ -22,6 +22,20 @@ When you complete a task:
 2. Write a brief summary of what you did as your final message
 3. Include any file paths, URLs, or assets the GM needs for delivery
 
+{{#NONO}}
+## Credentials
+
+You are running inside a nono sandbox. Credentials are injected automatically
+via a localhost proxy — you do not need to read .env files or manage API keys.
+If a tool or API call fails with an authentication error, create a blocked task
+explaining what credential you need access to.
+
+Do NOT attempt to:
+- Read .env files or credential files from the filesystem
+- Store API keys in files, environment variables, or code
+- Access the secret-tool or keyring directly
+{{/NONO}}
+
 ## Domain Knowledge
 
 <!-- Fill in project-specific context here -->
