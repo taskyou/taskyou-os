@@ -8,6 +8,10 @@
 
 set -euo pipefail
 
+# Ensure ~/.local/bin is in PATH (for ty, nono, etc.)
+# Daemon-spawned tmux panes may have a minimal PATH that skips .bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
 # Find the real binary by searching PATH without ~/bin
 REAL_BIN=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^$HOME/bin$" | tr '\n' ':' | sed 's/:$//') which {{EXECUTOR_BIN}} 2>/dev/null)
 

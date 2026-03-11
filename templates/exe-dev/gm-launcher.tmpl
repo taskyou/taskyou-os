@@ -1,2 +1,5 @@
 #!/bin/bash
+# Ensure ty, nono wrappers, and other user tools are in PATH
+# (tmux/daemon sessions may not source .bashrc)
+export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 cd /home/exedev/projects/gm && exec claude --dangerously-skip-permissions "$@"
