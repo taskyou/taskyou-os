@@ -82,6 +82,7 @@ Have a conversation about what they're building. The goal is to understand their
 Also ask:
 5. **Do they need GitHub?** Only needed if agents will be pushing code to GitHub repositories. For research/analysis/content projects, the answer is usually no.
 6. **Linear** (task escalation to humans) or **R2** (hosting generated files) — skip unless they know what these are or have a clear need.
+7. **Credential isolation (nono):** If the agents will use external APIs (SaaS services, databases, etc.) now or in the future, recommend enabling nono. Explain it simply: "This keeps your API keys locked in a secure vault on the server. Your agents can use the APIs they need, but they never see the raw passwords or keys — they're injected automatically behind the scenes." Default to enabling it — it's safe to turn on even before any credentials are added. Set `NONO_ENABLED="true"` in config.env. Credentials and proxy hosts can be added later as integrations are set up.
 
 Present your recommendations and get confirmation. Then move to Phase 2.
 
@@ -260,6 +261,7 @@ Use everything from Phase 1 (project name, workspaces, alias, etc.) and Phase 2 
 If Linear was chosen, collect: API key, team ID, team key, label ID, state ID, workspace URL.
 If R2 was chosen, collect: bucket name, public URL.
 If GitHub repos are needed, collect the `workspace:org/repo` mappings.
+If nono was chosen (recommended), set `NONO_ENABLED="true"` in config.env. The `NONO_CREDENTIALS` and `NONO_PROXY_HOSTS` can be left commented out for now — they're added later when actual API integrations are configured.
 
 ### Create the project directory:
 ```bash

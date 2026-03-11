@@ -336,13 +336,21 @@ setup_nono() {
 
   log "Setting up nono credential isolation"
 
-  # Install nono
+  # Install nono via .deb package (Ubuntu/Debian)
   if ssh "$ssh_target" "command -v nono" >/dev/null 2>&1; then
     ok "nono already installed"
   else
     log "Installing nono"
-    ssh "$ssh_target" "curl -fsSL https://github.com/always-further/nono/releases/latest/download/nono-installer.sh | bash" || {
-      warn "nono auto-install failed. Install manually: https://github.com/always-further/nono"
+    # Get latest version, download .deb, install
+    # The .deb filename varies between releases (with/without -1 suffix), so try both
+    ssh "$ssh_target" 'set -e
+      VERSION=$(curl -sI https://github.com/always-further/nono/releases/latest | grep -i location | grep -oP "v\K[0-9.]+")
+      echo "Installing nono v${VERSION}"
+      wget -q "https://github.com/always-further/nono/releases/download/v${VERSION}/nono-cli_${VERSION}-1_amd64.deb" -O /tmp/nono.deb 2>/dev/null \
+        || wget -q "https://github.com/always-further/nono/releases/download/v${VERSION}/nono-cli_${VERSION}_amd64.deb" -O /tmp/nono.deb
+      sudo dpkg -i /tmp/nono.deb
+      rm -f /tmp/nono.deb' || {
+      warn "nono install failed. Install manually: https://nono.sh/docs/cli/getting_started/installation"
       warn "Skipping credential isolation setup."
       return 1
     }
@@ -384,12 +392,12 @@ setup_nono() {
     done
   fi
 
-  # Deploy nono profile
+  # Deploy nono profile (JSON format required by nono)
   log "Deploying nono profile"
   ssh "$ssh_target" "mkdir -p $remote_home/.config/nono/profiles"
-  render_file "$TEMPLATES_DIR/nono-profile.toml.tmpl" "/tmp/taskyou-nono-profile.toml"
-  scp -q "/tmp/taskyou-nono-profile.toml" "$ssh_target:$remote_home/.config/nono/profiles/taskyou-agent.toml"
-  rm -f "/tmp/taskyou-nono-profile.toml"
+  render_file "$TEMPLATES_DIR/nono-profile.json.tmpl" "/tmp/taskyou-nono-profile.json"
+  scp -q "/tmp/taskyou-nono-profile.json" "$ssh_target:$remote_home/.config/nono/profiles/taskyou-agent.json"
+  rm -f "/tmp/taskyou-nono-profile.json"
   ok "profile: taskyou-agent"
 
   # Deploy executor wrappers
@@ -412,12 +420,15 @@ setup_nono() {
     ok "wrapper: ~/bin/$executor"
   done
 
-  # Ensure ~/bin is first in PATH
-  if ! ssh "$ssh_target" "grep -q 'export PATH=\$HOME/bin:\$PATH' $remote_home/.bashrc" 2>/dev/null; then
-    ssh "$ssh_target" "echo 'export PATH=\$HOME/bin:\$PATH' >> $remote_home/.bashrc"
-    ok "PATH: ~/bin prepended in .bashrc"
+  # Ensure ~/bin and ~/.local/bin are in PATH
+  # Both are needed: ~/bin for nono wrappers, ~/.local/bin for ty and other user tools
+  if ! ssh "$ssh_target" "grep -q 'export PATH=\$HOME/bin:\$HOME/.local/bin:\$PATH' $remote_home/.bashrc" 2>/dev/null; then
+    # Remove any older partial PATH line we may have added before
+    ssh "$ssh_target" "sed -i '/^export PATH=\\\$HOME\/bin:\\\$PATH$/d' $remote_home/.bashrc" 2>/dev/null || true
+    ssh "$ssh_target" "echo 'export PATH=\$HOME/bin:\$HOME/.local/bin:\$PATH' >> $remote_home/.bashrc"
+    ok "PATH: ~/bin and ~/.local/bin prepended in .bashrc"
   else
-    ok "PATH: ~/bin already in .bashrc"
+    ok "PATH: ~/bin and ~/.local/bin already in .bashrc"
   fi
 
   # Note: Plain-text .env files (e.g., linear-cli/.env) are NOT removed here.
@@ -602,12 +613,14 @@ EOF
   rm -f "/tmp/taskyou-audit.sh"
   ok "audit.sh"
 
-  # Start daemon
+  # Start daemon (with ~/bin and ~/.local/bin in PATH so tmux sessions inherit it)
+  # This is critical: the daemon spawns tmux panes that run executors.
+  # If ~/bin isn't in PATH, nono wrappers are bypassed entirely.
   log "Starting TaskYou daemon"
   if remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
     ok "Daemon already running"
   else
-    remote "nohup $SERVER_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
+    remote "export PATH=$SERVER_HOME/bin:$SERVER_HOME/.local/bin:\$PATH && nohup $SERVER_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
     sleep 2
     if remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
       ok "Daemon started"
@@ -946,12 +959,14 @@ EOF
   rm -f "/tmp/taskyou-audit.sh"
   ok "audit.sh"
 
-  # Start TaskYou daemon
+  # Start TaskYou daemon (with ~/bin and ~/.local/bin in PATH so tmux sessions inherit it)
+  # This is critical: the daemon spawns tmux panes that run executors.
+  # If ~/bin isn't in PATH, nono wrappers are bypassed entirely.
   log "Starting TaskYou daemon"
   if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
     ok "Daemon already running"
   else
-    exe_remote "nohup $EXE_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
+    exe_remote "export PATH=$EXE_HOME/bin:$EXE_HOME/.local/bin:\$PATH && nohup $EXE_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
     sleep 2
     if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
       ok "Daemon started"
