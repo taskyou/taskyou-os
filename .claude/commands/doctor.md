@@ -237,41 +237,42 @@ ssh "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" &
 
 ---
 
-### Check 6: GM Templates Up to Date
+### Check 6: GM Command Migration
 
-Check if the GM has the latest commands and template content from the plugin.
+GM commands (`/gm-status`, `/gm-fix`, `/gm-start`, `/gm-help`, `/gm-babysit`) are now delivered by the TaskYou-OS plugin directly. Old locally-rendered copies in the GM's `.claude/commands/` directory shadow the plugin versions and must be removed.
 
 **Steps:**
 
-1. Find the plugin's installed template directory:
+1. Check for old local gm-* command files in the GM directory:
 ```bash
-PLUGIN_DIR=$(python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/installed_plugins.json')); entries=d.get('plugins',{}).get('taskyou-os@taskyou-os',[]); print(entries[0]['installPath'] if entries else '')" 2>/dev/null)
-echo "Plugin dir: $PLUGIN_DIR"
+ls "$LOCAL_PROJECT_DIR/.claude/commands/gm-"*.md 2>/dev/null
 ```
 
-2. List the command templates available in the plugin vs commands installed in the GM:
-```bash
-echo "=== Plugin templates ==="
-ls "$PLUGIN_DIR/templates/commands/" 2>/dev/null | sed 's/.md.tmpl$//'
-
-echo "=== GM commands ==="
-ls "$LOCAL_PROJECT_DIR/.claude/commands/" 2>/dev/null | sed 's/.md$//'
-```
-
-3. **For each command template that does NOT exist in the GM** (new commands):
-   - This is a new command added since the GM was set up
-   - Render it by sourcing the GM's `config.env` and using setup.sh's render function:
+2. If any `gm-*.md` files exist in `$LOCAL_PROJECT_DIR/.claude/commands/`:
+   - These are old rendered copies from before commands moved to the plugin
+   - They shadow the plugin commands, preventing automatic updates from reaching the user
+   - List them and explain: "These commands are now delivered by the TaskYou-OS plugin and update automatically. The local copies need to be removed so the plugin versions take effect."
+   - Remove them:
    ```bash
-   source "$CONFIG"
-   cd "$(dirname "$CONFIG")/.."
-   bash -c 'source setup.sh 2>/dev/null; source "'"$CONFIG"'"; render_file "'"$PLUGIN_DIR"'/templates/commands/NEW_CMD.md.tmpl" "/tmp/taskyou-doctor-new-cmd.md"' 2>/dev/null
+   rm "$LOCAL_PROJECT_DIR/.claude/commands/gm-"*.md
    ```
-   If the render_file approach doesn't work, do simple `{{VARIABLE}}` substitution yourself using the config values.
-   - **Show the user what the command does** (read the rendered file and summarize it)
-   - **Ask the user** if they want to add it to their GM
-   - If yes, copy the rendered file to `$LOCAL_PROJECT_DIR/.claude/commands/`
+   - If the `.claude/commands/` directory is now empty, remove it:
+   ```bash
+   rmdir "$LOCAL_PROJECT_DIR/.claude/commands" 2>/dev/null
+   ```
+
+3. Verify `config.env` exists in the GM project root (plugin commands need it at runtime):
+```bash
+test -f "$LOCAL_PROJECT_DIR/config.env" && echo "config.env found" || echo "config.env MISSING"
+```
+
+If `config.env` is missing, report FAIL — the plugin commands won't work without it.
 
 4. **For CLAUDE.md** — check if the plugin's template has new sections the GM is missing:
+   - Find the plugin directory:
+   ```bash
+   PLUGIN_DIR=$(python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/installed_plugins.json')); entries=d.get('plugins',{}).get('taskyou-os@taskyou-os',[]); print(entries[0]['installPath'] if entries else '')" 2>/dev/null)
+   ```
    - Read the plugin's `$PLUGIN_DIR/templates/CLAUDE.md.tmpl`
    - Read the GM's `$LOCAL_PROJECT_DIR/CLAUDE.md`
    - Compare section headers (`## ` lines) between the template and the GM's file
@@ -282,13 +283,10 @@ ls "$LOCAL_PROJECT_DIR/.claude/commands/" 2>/dev/null | sed 's/.md$//'
      - If yes, insert it at the appropriate location in the GM's CLAUDE.md
    - Do NOT touch or overwrite existing sections — only offer to add new ones
 
-5. **For existing commands that differ from the template**: Note which commands have upstream changes available, but do NOT overwrite them. Just inform the user: "The template for /gm-status has been updated. You may want to review the changes."
-
-**Important:** Always ask before modifying any file. Never overwrite a file that the user may have customized.
-
-**If no new templates/sections found:** Report PASS with "GM templates are up to date."
-**If new commands/sections were added:** Report WARN with summary of what was added.
-**If user declined updates:** Report WARN with "Updates available but skipped."
+**If no local gm-* commands found and config.env exists:** Report PASS with "Commands delivered by plugin — no migration needed."
+**If local commands were removed:** Report WARN with "Migrated: removed N local command(s) that were shadowing plugin commands. Plugin commands will take effect on next Claude Code restart."
+**If config.env missing:** Report FAIL with "config.env not found — plugin commands need it. Re-run setup or restore from backup."
+**If new CLAUDE.md sections were added:** Report WARN with summary of what was added.
 
 ---
 
