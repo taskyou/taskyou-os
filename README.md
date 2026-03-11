@@ -46,7 +46,8 @@ Your Mac                          Server
 - You talk to the **GM** (a Claude session on your Mac) in plain English
 - The GM creates tasks and assigns them to **agents** on the server
 - Agents work in the background — close your laptop, they keep going
-- Get notified when tasks finish or need your attention
+- The GM **automatically tracks running tasks** and notifies you when they complete or get blocked — no need to remember to check
+- Use `/babysit` for an immediate status check on all tracked tasks
 - Optional menu bar widget shows live agent status
 
 ## exe.dev Deployment (No Local Machine Required)
@@ -79,6 +80,10 @@ To deploy:
 ```
 
 This creates the VM, uploads everything, and prints the URL. Share access with teammates via `ssh exe.dev share add <vm> user@example.com`.
+
+## Keeping Your GM Up to Date
+
+When new features are added (like `/babysit`), run `/taskyou-os:doctor` in any GM. It detects new commands and CLAUDE.md sections available from the plugin and offers to add them — without overwriting your customizations.
 
 ## Optional Integrations
 
