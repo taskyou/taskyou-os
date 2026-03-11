@@ -2,7 +2,7 @@
 
 Your own AI agent team, running on a remote server and managed through Claude Code.
 
-You describe what you need in plain English. A "General Manager" on your Mac delegates work to background agents on the server. They research, analyze, write, and build — even while your laptop is closed.
+You describe what you need in plain English. A "General Manager" running in Claude Code delegates work to background agents on a remote server. They research, analyze, write, and build — even while your laptop is closed.
 
 ## Get Started
 
@@ -29,7 +29,7 @@ You can re-run `/taskyou-os:launch` anytime to resume an interrupted setup or fi
 ## How It Works
 
 ```
-Your Mac                          Server
+Your Machine                      Server
 ┌──────────────┐                  ┌──────────────────┐
 │ Claude Code  │ ──── SSH ─────→  │ TaskYou daemon   │
 │ (GM session) │                  │ ┌──────────────┐ │
@@ -43,7 +43,7 @@ Your Mac                          Server
                                   └──────────────────┘
 ```
 
-- You talk to the **GM** (a Claude session on your Mac) in plain English
+- You talk to the **GM** (a Claude Code session on your machine) in plain English
 - The GM creates tasks and assigns them to **agents** on the server
 - Agents work in the background — close your laptop, they keep going
 - The GM **automatically tracks running tasks** and notifies you when they complete or get blocked — no need to remember to check
@@ -51,7 +51,7 @@ Your Mac                          Server
 
 ## exe.dev Deployment (No Local Machine Required)
 
-Instead of running the GM on your Mac over SSH, you can deploy it entirely onto an [exe.dev](https://exe.dev) VM. This gives you a web-accessible GM with:
+Instead of running the GM locally over SSH, you can deploy it entirely onto an [exe.dev](https://exe.dev) VM. This gives you a web-accessible GM with:
 
 - A **landing page** with a live kanban board
 - A **one-click terminal** button that opens the GM in your browser
@@ -123,6 +123,6 @@ cp config.example.env ~/Projects/gms/myproject/config.env
 ./setup.sh all ~/Projects/gms/myproject
 ```
 
-Modes: `local` (Mac only), `server` (remote server only), `exe` (exe.dev VM), `all` (local + server).
+Modes: `local` (local machine only), `server` (remote server only), `exe` (exe.dev VM), `all` (local + server).
 
 See `config.example.env` for all available configuration options.
