@@ -80,19 +80,40 @@ To deploy:
 
 This creates the VM, uploads everything, and prints the URL. Share access with teammates via `ssh exe.dev share add <vm> user@example.com`.
 
-## Keeping Your GM Up to Date
+## GM Commands
 
-When new features are added (like `/gm-babysit`), run `/taskyou-os:doctor` in any GM. It detects new commands and CLAUDE.md sections available from the plugin and offers to add them — without overwriting your customizations.
+Once your GM is running, these commands are available:
 
-## Optional Integrations
+| Command | What it does |
+|---------|-------------|
+| `/gm-babysit` | Immediate status check on all tracked tasks |
+| `/gm-status` | Daemon, tasks, and agents overview |
+| `/gm-fix` | Diagnose and fix agent system problems |
+| `/gm-start` | Getting started guide with project-specific examples |
+| `/gm-help` | Quick reference for all commands and TaskYou CLI |
 
-- **Linear** — Escalate tasks that need human attention to your Linear board
-- **Cloudflare R2** — Host files and assets your agents generate
-- **GitHub** — Push agent work to your repositories
+## Plugin Commands
+
+These run from the taskyou-os plugin context (not inside a GM):
+
+| Command | What it does |
+|---------|-------------|
+| `/taskyou-os:launch` | Interactive wizard to create a new GM |
+| `/taskyou-os:doctor` | Health check — updates plugin, checks versions, daemon status, executor health, template drift, security audit |
+
+Run `/doctor` periodically to keep things healthy. It also detects new commands available from the plugin and offers to add them to existing GMs.
+
+## Built-in Modules
+
+These are configured via flags in `config.env` during setup. They're part of the repo, not separate installs.
+
+- **Linear** (`LINEAR_ENABLED=true`) — Agent-to-human handoff via Linear issues, plus `@agent` comments for revisions
+- **Cloudflare R2** (`R2_ENABLED=true`) — Public URLs for files and assets agents generate
+- **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories
 
 ## Manual Setup
 
-If you prefer to configure things yourself instead of using the interactive setup:
+If you prefer to skip the interactive `/launch` wizard:
 
 ```bash
 mkdir -p ~/Projects/gms/myproject
