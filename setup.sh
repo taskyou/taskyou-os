@@ -509,6 +509,14 @@ EOF
     fi
   fi
 
+  # Security audit script
+  log "Installing security audit script"
+  render_file "$TEMPLATES_DIR/audit.sh.tmpl" "/tmp/taskyou-audit.sh"
+  scp -q "/tmp/taskyou-audit.sh" "$SERVER_HOST:$SERVER_HOME/.local/bin/audit.sh"
+  remote "chmod +x $SERVER_HOME/.local/bin/audit.sh"
+  rm -f "/tmp/taskyou-audit.sh"
+  ok "audit.sh"
+
   # Start daemon
   log "Starting TaskYou daemon"
   if remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
@@ -839,6 +847,14 @@ EOF
       ok "Linear cron job installed"
     fi
   fi
+
+  # Security audit script
+  log "Installing security audit script"
+  render_file "$TEMPLATES_DIR/audit.sh.tmpl" "/tmp/taskyou-audit.sh"
+  scp -q "/tmp/taskyou-audit.sh" "$EXE_HOST:$EXE_HOME/.local/bin/audit.sh"
+  exe_remote "chmod +x $EXE_HOME/.local/bin/audit.sh"
+  rm -f "/tmp/taskyou-audit.sh"
+  ok "audit.sh"
 
   # Start TaskYou daemon
   log "Starting TaskYou daemon"

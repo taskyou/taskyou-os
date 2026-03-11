@@ -292,6 +292,36 @@ ls "$LOCAL_PROJECT_DIR/.claude/commands/" 2>/dev/null | sed 's/.md$//'
 
 ---
 
+### Check 7: Security Audit
+
+Run the server-side security audit script to check credentials, permissions, and exposed services.
+
+**Steps:**
+
+1. Check if the audit script exists on the server:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'test -x $HOME/.local/bin/audit.sh && echo "INSTALLED" || echo "NOT_INSTALLED"' 2>/dev/null
+```
+
+2. **If installed**, run it:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" '$HOME/.local/bin/audit.sh' 2>/dev/null
+```
+
+3. Present the output to the user. The script is designed to never output raw secret values — only metadata (variable names, char counts, file permissions, timestamps). It is safe to display the full output.
+
+4. After showing the report, highlight any `[WARN]` findings and summarize them.
+
+**If not installed:** Report WARN with: "Security audit script not found on the server. Re-run setup.sh to deploy it, or update the plugin and run /doctor again."
+
+**If the script runs and finds no warnings:** Report PASS.
+
+**If the script finds warnings (permission issues, unexpected files, etc.):** Report WARN with a summary of findings.
+
+**If SSH connection fails:** Report FAIL with "Could not connect to server."
+
+---
+
 ## Summary
 
 After all checks, present a summary table:
@@ -305,6 +335,7 @@ TaskYou-OS Doctor
   Daemon mode        PASS/WARN/FAIL
   Executor health    PASS/WARN/FAIL
   GM templates       PASS/WARN/FAIL
+  Security audit     PASS/WARN/FAIL
 ─────────────────────────────────
 ```
 
