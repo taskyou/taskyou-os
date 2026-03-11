@@ -370,6 +370,105 @@ setup_local() {
   fi
 }
 
+# ── nono credential isolation ────────────────────────────────────────────────
+
+setup_nono() {
+  local ssh_target="$1"
+  local remote_home="$2"
+
+  log "Setting up nono credential isolation"
+
+  # Install nono
+  if ssh "$ssh_target" "command -v nono" >/dev/null 2>&1; then
+    ok "nono already installed"
+  else
+    log "Installing nono"
+    ssh "$ssh_target" "curl -fsSL https://github.com/always-further/nono/releases/latest/download/nono-installer.sh | bash" || {
+      warn "nono auto-install failed. Install manually: https://github.com/always-further/nono"
+      warn "Skipping credential isolation setup."
+      return 1
+    }
+    ok "nono installed"
+  fi
+
+  # Ensure libsecret is available for Secret Service credential storage
+  ssh "$ssh_target" "command -v secret-tool" >/dev/null 2>&1 || {
+    log "Installing libsecret-tools"
+    ssh "$ssh_target" "sudo apt-get update -qq && sudo apt-get install -y -qq libsecret-tools" || {
+      warn "Could not install libsecret-tools. secret-tool is required for credential storage."
+      return 1
+    }
+  }
+  ok "secret-tool available"
+
+  # Store credentials in Linux Secret Service
+  if [[ -n "$NONO_CREDENTIALS" ]]; then
+    log "Storing credentials in Secret Service"
+    IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
+    for entry in "${creds[@]}"; do
+      local name env_var value
+      name=$(echo "$entry" | cut -d: -f1 | xargs)
+      env_var=$(echo "$entry" | cut -d: -f2 | xargs)
+      value="${!env_var:-}"
+
+      if [[ -z "$value" ]]; then
+        warn "Skipping $name: $env_var is empty in config.env"
+        continue
+      fi
+
+      # Store in Secret Service under service=nono
+      ssh "$ssh_target" "echo '$value' | secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
+        warn "Failed to store $name — secret-tool may need a D-Bus session"
+        continue
+      }
+      ok "credential: $name (from $env_var)"
+    done
+  fi
+
+  # Deploy nono profile
+  log "Deploying nono profile"
+  ssh "$ssh_target" "mkdir -p $remote_home/.config/nono/profiles"
+  render_file "$TEMPLATES_DIR/nono-profile.toml.tmpl" "/tmp/taskyou-nono-profile.toml"
+  scp -q "/tmp/taskyou-nono-profile.toml" "$ssh_target:$remote_home/.config/nono/profiles/taskyou-agent.toml"
+  rm -f "/tmp/taskyou-nono-profile.toml"
+  ok "profile: taskyou-agent"
+
+  # Deploy executor wrappers
+  log "Deploying executor wrappers"
+  ssh "$ssh_target" "mkdir -p $remote_home/bin"
+
+  for executor in claude codex gemini openclaw opencode pi; do
+    # Check if this executor is actually installed on the server
+    if ! ssh "$ssh_target" "PATH=\$(echo \"\$PATH\" | tr ':' '\\n' | grep -v \"^\$HOME/bin\$\" | tr '\\n' ':' | sed 's/:\$//') command -v $executor" >/dev/null 2>&1; then
+      continue  # Skip executors that aren't installed
+    fi
+
+    export EXECUTOR_BIN="$executor"
+    render_file "$TEMPLATES_DIR/nono-wrapper.sh.tmpl" "/tmp/nono-wrapper-$executor.sh"
+    scp -q "/tmp/nono-wrapper-$executor.sh" "$ssh_target:$remote_home/bin/$executor"
+    ssh "$ssh_target" "chmod +x $remote_home/bin/$executor"
+    rm -f "/tmp/nono-wrapper-$executor.sh"
+    ok "wrapper: ~/bin/$executor"
+  done
+
+  # Ensure ~/bin is first in PATH
+  if ! ssh "$ssh_target" "grep -q 'export PATH=\$HOME/bin:\$PATH' $remote_home/.bashrc" 2>/dev/null; then
+    ssh "$ssh_target" "echo 'export PATH=\$HOME/bin:\$PATH' >> $remote_home/.bashrc"
+    ok "PATH: ~/bin prepended in .bashrc"
+  else
+    ok "PATH: ~/bin already in .bashrc"
+  fi
+
+  # Remove plain-text .env files that contained credentials
+  if [[ -n "$NONO_CREDENTIALS" ]]; then
+    log "Cleaning up plain-text credential files"
+    ssh "$ssh_target" "rm -f $remote_home/tools/linear-cli/.env $remote_home/scripts/.env" 2>/dev/null || true
+    ok "Plain-text .env files removed"
+  fi
+
+  log "nono credential isolation setup complete"
+}
+
 # ── Server setup ─────────────────────────────────────────────────────────────
 
 setup_server() {
