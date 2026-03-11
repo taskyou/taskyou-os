@@ -417,7 +417,8 @@ setup_nono() {
       fi
 
       # Store in Secret Service under service=nono
-      ssh "$ssh_target" "echo '$value' | secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
+      # Pipe value via stdin to avoid shell injection from special characters in credentials
+      printf '%s' "$value" | ssh "$ssh_target" "secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
         warn "Failed to store $name — secret-tool may need a D-Bus session"
         continue
       }
@@ -443,8 +444,10 @@ setup_nono() {
       continue  # Skip executors that aren't installed
     fi
 
+    (
     export EXECUTOR_BIN="$executor"
     render_file "$TEMPLATES_DIR/nono-wrapper.sh.tmpl" "/tmp/nono-wrapper-$executor.sh"
+    )
     scp -q "/tmp/nono-wrapper-$executor.sh" "$ssh_target:$remote_home/bin/$executor"
     ssh "$ssh_target" "chmod +x $remote_home/bin/$executor"
     rm -f "/tmp/nono-wrapper-$executor.sh"
@@ -459,12 +462,11 @@ setup_nono() {
     ok "PATH: ~/bin already in .bashrc"
   fi
 
-  # Remove plain-text .env files that contained credentials
-  if [[ -n "$NONO_CREDENTIALS" ]]; then
-    log "Cleaning up plain-text credential files"
-    ssh "$ssh_target" "rm -f $remote_home/tools/linear-cli/.env $remote_home/scripts/.env" 2>/dev/null || true
-    ok "Plain-text .env files removed"
-  fi
+  # Note: Plain-text .env files (e.g., linear-cli/.env) are NOT removed here.
+  # They are used by cron scripts (linear-poll.mjs) that run outside the nono
+  # sandbox. Agents cannot access these files because nono's Landlock sandbox
+  # restricts filesystem access to the paths defined in the profile.
+  # A future version could move cron scripts into the sandbox as well.
 
   log "nono credential isolation setup complete"
 }
@@ -568,7 +570,7 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
 
   # nono credential isolation
   if [[ "$NONO_ENABLED" == "true" ]]; then
-    setup_nono "$SERVER_HOST" "$SERVER_HOME"
+    setup_nono "$SERVER_HOST" "$SERVER_HOME" || warn "nono setup failed, continuing without credential isolation"
   fi
 
   # Linear module
@@ -818,7 +820,7 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
 
   # nono credential isolation
   if [[ "$NONO_ENABLED" == "true" ]]; then
-    setup_nono "$EXE_HOST" "$EXE_HOME"
+    setup_nono "$EXE_HOST" "$EXE_HOME" || warn "nono setup failed, continuing without credential isolation"
   fi
 
   # GM launcher script
