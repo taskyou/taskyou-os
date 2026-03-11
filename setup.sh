@@ -293,10 +293,6 @@ setup_local() {
   chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-action"
   ok "bin/${PROJECT_NAME}-action"
 
-  render_file "$TEMPLATES_DIR/agent-monitor.tmpl" "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-agent-monitor"
-  chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-agent-monitor"
-  ok "bin/${PROJECT_NAME}-agent-monitor"
-
   render_file "$TEMPLATES_DIR/retry-task.tmpl" "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-retry-task"
   chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-retry-task"
   ok "bin/${PROJECT_NAME}-retry-task"
@@ -304,15 +300,6 @@ setup_local() {
   render_file "$TEMPLATES_DIR/open-board.tmpl" "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-open-board"
   chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-open-board"
   ok "bin/${PROJECT_NAME}-open-board"
-
-  # SwiftBar plugin
-  render_file "$TEMPLATES_DIR/swiftbar-plugin.60s.sh.tmpl" "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-gm.60s.sh"
-  chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-gm.60s.sh"
-  ok "bin/${PROJECT_NAME}-gm.60s.sh (SwiftBar plugin)"
-
-  # launchd plist
-  render_file "$TEMPLATES_DIR/launchd-plist.tmpl" "$LOCAL_PROJECT_DIR/bin/com.${PROJECT_NAME}.agent-monitor.plist"
-  ok "bin/com.${PROJECT_NAME}.agent-monitor.plist"
 
   # R2 wrangler.toml
   if [[ "$R2_ENABLED" == "true" ]]; then
@@ -349,25 +336,6 @@ setup_local() {
   log "Local setup complete"
   echo ""
 
-  # Optional installs
-  read -rp "Install SwiftBar plugin to ~/Library/Application Support/SwiftBar/? [y/N] " install_swiftbar
-  if [[ "$install_swiftbar" =~ ^[Yy]$ ]]; then
-    local swiftbar_dir="$HOME/Library/Application Support/SwiftBar"
-    mkdir -p "$swiftbar_dir"
-    cp "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-gm.60s.sh" "$swiftbar_dir/"
-    ok "SwiftBar plugin installed"
-    warn "You need a logo.png in $LOCAL_PROJECT_DIR/bin/ for the menu bar icon"
-  fi
-
-  read -rp "Install and load launchd agent for the monitor? [y/N] " install_launchd
-  if [[ "$install_launchd" =~ ^[Yy]$ ]]; then
-    local plist_name="com.${PROJECT_NAME}.agent-monitor.plist"
-    local plist_dest="$HOME/Library/LaunchAgents/$plist_name"
-    cp "$LOCAL_PROJECT_DIR/bin/$plist_name" "$plist_dest"
-    launchctl unload "$plist_dest" 2>/dev/null || true
-    launchctl load "$plist_dest"
-    ok "launchd agent loaded: $plist_name"
-  fi
 }
 
 # ── nono credential isolation ────────────────────────────────────────────────
@@ -635,6 +603,14 @@ EOF
       ok "Cron job installed (every 2 minutes)"
     fi
   fi
+
+  # Security audit script
+  log "Installing security audit script"
+  render_file "$TEMPLATES_DIR/audit.sh.tmpl" "/tmp/taskyou-audit.sh"
+  scp -q "/tmp/taskyou-audit.sh" "$SERVER_HOST:$SERVER_HOME/.local/bin/audit.sh"
+  remote "chmod +x $SERVER_HOME/.local/bin/audit.sh"
+  rm -f "/tmp/taskyou-audit.sh"
+  ok "audit.sh"
 
   # Start daemon
   log "Starting TaskYou daemon"
@@ -972,6 +948,14 @@ EOF
     fi
   fi
 
+  # Security audit script
+  log "Installing security audit script"
+  render_file "$TEMPLATES_DIR/audit.sh.tmpl" "/tmp/taskyou-audit.sh"
+  scp -q "/tmp/taskyou-audit.sh" "$EXE_HOST:$EXE_HOME/.local/bin/audit.sh"
+  exe_remote "chmod +x $EXE_HOME/.local/bin/audit.sh"
+  rm -f "/tmp/taskyou-audit.sh"
+  ok "audit.sh"
+
   # Start TaskYou daemon
   log "Starting TaskYou daemon"
   if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
@@ -1027,9 +1011,7 @@ print_checklist() {
     echo ""
   fi
 
-  echo " 5. Add a logo.png to $LOCAL_PROJECT_DIR/bin/ for the SwiftBar menu bar icon"
-  echo ""
-  echo " 6. Start the GM:"
+  echo " 5. Start the GM:"
   echo "    ${GM_ALIAS}"
   echo ""
 }

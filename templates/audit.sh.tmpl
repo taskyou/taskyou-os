@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+# TaskYou-OS Security Audit Script
+# Runs on the remote server. Reports ONLY metadata — never raw secret values.
+# Deployed to: {{SERVER_HOME}}/.local/bin/audit.sh
+
+set -uo pipefail
+
+SERVER_HOME="{{SERVER_HOME}}"
+PROJECT_NAME="{{PROJECT_NAME}}"
+
+# Known .env paths deployed by setup.sh
+KNOWN_ENV_FILES=(
+{{#LINEAR}}
+  "$SERVER_HOME/tools/linear-cli/.env"
+  "$SERVER_HOME/scripts/.env"
+{{/LINEAR}}
+)
+
+# Patterns that indicate a secret in env var names
+SECRET_PATTERNS="TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH|API_KEY|PRIVATE"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+header() {
+  echo ""
+  echo "--- $1 ---"
+}
+
+warn_perms() {
+  local file="$1"
+  local perms="$2"
+  # 0600/0700 are acceptable for sensitive files, anything else is a warning
+  if [[ "$perms" != "0600" && "$perms" != "0700" && "$perms" != "600" && "$perms" != "700" ]]; then
+    echo "[WARN: should be 0600]"
+  else
+    echo ""
+  fi
+}
+
+file_info() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    local perms modified
+    perms=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null)
+    modified=$(stat -c '%y' "$file" 2>/dev/null | cut -d. -f1 || stat -f '%Sm' "$file" 2>/dev/null)
+    echo "exists  $perms  modified $modified"
+  else
+    echo "NOT FOUND"
+  fi
+}
+
+# ── Report Header ────────────────────────────────────────────────────────────
+
+echo "=== SECURITY AUDIT: $PROJECT_NAME ==="
+echo "Server: $(hostname)"
+echo "User:   $(whoami)"
+echo "Date:   $(date -u '+%Y-%m-%d %H:%M UTC')"
+
+# ── Check 1: Environment Variables ───────────────────────────────────────────
+
+header "ENVIRONMENT VARIABLES"
+
+env_count=0
+secret_count=0
+while IFS='=' read -r key value; do
+  [[ -z "$key" ]] && continue
+  env_count=$((env_count + 1))
+  len=${#value}
+
+  if echo "$key" | grep -qiE "$SECRET_PATTERNS"; then
+    printf "  %-35s [!]  set (%d chars)\n" "$key" "$len"
+    secret_count=$((secret_count + 1))
+  else
+    printf "  %-35s      set (%d chars)\n" "$key" "$len"
+  fi
+done < <(env | sort)
+
+echo ""
+echo "  Total: $env_count variables, $secret_count flagged as potential secrets"
+
+# ── Check 2: .env Files ─────────────────────────────────────────────────────
+
+header ".ENV FILES"
+
+# Known files
+echo "Known (deployed by setup.sh):"
+known_found=0
+for envfile in "${KNOWN_ENV_FILES[@]}"; do
+  envfile=$(eval echo "$envfile")  # expand variables
+  [[ -z "$envfile" ]] && continue
+  if [[ -f "$envfile" ]]; then
+    known_found=$((known_found + 1))
+    perms=$(stat -c '%a' "$envfile" 2>/dev/null || stat -f '%Lp' "$envfile" 2>/dev/null)
+    var_names=$(grep -oP '^[A-Z_]+=?' "$envfile" 2>/dev/null | sed 's/=$//' | tr '\n' ', ' | sed 's/,$//')
+    var_count=$(grep -cP '^[A-Z_]+=' "$envfile" 2>/dev/null || echo 0)
+    rel_path="${envfile#$SERVER_HOME/}"
+    warn=$(warn_perms "$envfile" "$perms")
+    printf "  %-40s %s %s  %d vars: %s\n" "$rel_path" "$perms" "$warn" "$var_count" "$var_names"
+  fi
+done
+[[ $known_found -eq 0 ]] && echo "  (none)"
+
+# Discovery scan
+echo "Discovered:"
+discovered=0
+while IFS= read -r envfile; do
+  [[ -z "$envfile" ]] && continue
+  # Skip known files
+  skip=false
+  for known in "${KNOWN_ENV_FILES[@]}"; do
+    known=$(eval echo "$known")
+    [[ "$envfile" == "$known" ]] && skip=true && break
+  done
+  $skip && continue
+
+  discovered=$((discovered + 1))
+  perms=$(stat -c '%a' "$envfile" 2>/dev/null || stat -f '%Lp' "$envfile" 2>/dev/null)
+  var_names=$(grep -oP '^[A-Z_]+=?' "$envfile" 2>/dev/null | sed 's/=$//' | tr '\n' ', ' | sed 's/,$//')
+  var_count=$(grep -cP '^[A-Z_]+=' "$envfile" 2>/dev/null || echo 0)
+  rel_path="${envfile#$SERVER_HOME/}"
+  warn=$(warn_perms "$envfile" "$perms")
+  printf "  %-40s %s %s  %d vars: %s\n" "$rel_path" "$perms" "$warn" "$var_count" "$var_names"
+done < <(find "$SERVER_HOME" -maxdepth 4 -name '*.env' -o -name '.env' 2>/dev/null | sort)
+[[ $discovered -eq 0 ]] && echo "  (none)"
+
+# ── Check 3: Claude Credentials ─────────────────────────────────────────────
+
+header "CLAUDE CREDENTIALS"
+
+# Known locations
+for cfile in "$HOME/.claude/.credentials.json" "$HOME/.claude.json" "$HOME/.claude/settings.json"; do
+  rel="${cfile#$HOME/}"
+  if [[ -f "$cfile" ]]; then
+    info=$(file_info "$cfile")
+    printf "  ~/%s\t%s\n" "$rel" "$info"
+
+    # Extra info for specific files
+    if [[ "$cfile" == *".claude.json" && "$cfile" != *"settings"* && "$cfile" != *"credentials"* ]]; then
+      trusted=$(python3 -c "
+import json
+with open('$cfile') as f: d = json.load(f)
+projects = d.get('projects', {})
+print(f'  trusted projects: {len(projects)} paths')
+" 2>/dev/null)
+      [[ -n "$trusted" ]] && echo "$trusted"
+    fi
+
+    if [[ "$cfile" == *"settings.json" ]]; then
+      skip_dangerous=$(python3 -c "
+import json
+with open('$cfile') as f: d = json.load(f)
+v = d.get('skipDangerousModePermissionPrompt', 'not set')
+print(f'  skipDangerousModePermissionPrompt: {v}')
+" 2>/dev/null)
+      [[ -n "$skip_dangerous" ]] && echo "$skip_dangerous"
+    fi
+  else
+    printf "  ~/%s\tNOT FOUND\n" "$rel"
+  fi
+done
+
+# Discovery scan for credential files in non-standard locations
+echo "Discovered (non-standard locations):"
+disc_creds=0
+while IFS= read -r cfile; do
+  [[ -z "$cfile" ]] && continue
+  # Skip known locations
+  [[ "$cfile" == "$HOME/.claude/.credentials.json" ]] && continue
+  [[ "$cfile" == "$HOME/.claude.json" ]] && continue
+  [[ "$cfile" == "$HOME/.claude/settings.json" ]] && continue
+
+  disc_creds=$((disc_creds + 1))
+  info=$(file_info "$cfile")
+  printf "  %s\t%s\n" "$cfile" "$info"
+done < <(find "$HOME" -maxdepth 5 \( -name '.credentials.json' -o -name '.claude.json' -o -name 'credentials.json' \) 2>/dev/null | sort)
+[[ $disc_creds -eq 0 ]] && echo "  (none)"
+
+# ── Check 4: SSH Keys ───────────────────────────────────────────────────────
+
+header "SSH KEYS"
+
+echo "Known (~/.ssh/):"
+if [[ -d "$HOME/.ssh" ]]; then
+  for f in "$HOME/.ssh"/*; do
+    [[ -f "$f" ]] || continue
+    fname=$(basename "$f")
+    perms=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f" 2>/dev/null)
+    modified=$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1 || stat -f '%Sm' "$f" 2>/dev/null)
+    warn=$(warn_perms "$f" "$perms")
+
+    # Extra info for authorized_keys
+    if [[ "$fname" == "authorized_keys" ]]; then
+      entry_count=$(wc -l < "$f" | tr -d ' ')
+      key_types=$(awk '{print $1}' "$f" 2>/dev/null | sort -u | tr '\n' ', ' | sed 's/,$//')
+      printf "  %-30s %s %s  %s entries (%s)\n" "$fname" "$perms" "$warn" "$entry_count" "$key_types"
+    else
+      printf "  %-30s %s %s  modified %s\n" "$fname" "$perms" "$warn" "$modified"
+    fi
+  done
+else
+  echo "  ~/.ssh/ directory NOT FOUND"
+fi
+
+# Discovery scan
+echo "Discovered (outside ~/.ssh/):"
+disc_keys=0
+while IFS= read -r kfile; do
+  [[ -z "$kfile" ]] && continue
+  [[ "$kfile" == "$HOME/.ssh/"* ]] && continue
+
+  disc_keys=$((disc_keys + 1))
+  info=$(file_info "$kfile")
+  printf "  %s\t%s\n" "$kfile" "$info"
+done < <(find "$HOME" -maxdepth 4 \( -name '*.pem' -o -name '*.key' -o -name 'id_*' -o -name '*.p12' -o -name '*.pfx' \) ! -path '*/.ssh/*' ! -path '*/node_modules/*' 2>/dev/null | sort)
+[[ $disc_keys -eq 0 ]] && echo "  (none)"
+
+# ── Check 5: Git Config ─────────────────────────────────────────────────────
+
+header "GIT CONFIG"
+
+git_name=$(git config --global user.name 2>/dev/null || echo "(not set)")
+git_email=$(git config --global user.email 2>/dev/null || echo "(not set)")
+cred_helper=$(git config --global credential.helper 2>/dev/null || echo "(none)")
+
+printf "  user.name         = %s\n" "$git_name"
+printf "  user.email        = %s\n" "$git_email"
+printf "  credential.helper = %s\n" "$cred_helper"
+
+# Check for stored credentials
+if [[ -f "$HOME/.git-credentials" ]]; then
+  line_count=$(wc -l < "$HOME/.git-credentials" | tr -d ' ')
+  perms=$(stat -c '%a' "$HOME/.git-credentials" 2>/dev/null || stat -f '%Lp' "$HOME/.git-credentials" 2>/dev/null)
+  warn=$(warn_perms "$HOME/.git-credentials" "$perms")
+  printf "  ~/.git-credentials  %s %s  %s entries\n" "$perms" "$warn" "$line_count"
+fi
+
+# ── Check 6: Running Processes ───────────────────────────────────────────────
+
+header "RUNNING PROCESSES"
+
+# TaskYou daemon
+daemon_info=$(pgrep -af "ty daemon" 2>/dev/null || echo "")
+if [[ -n "$daemon_info" ]]; then
+  daemon_pid=$(echo "$daemon_info" | awk '{print $1}' | head -1)
+  daemon_flags=$(echo "$daemon_info" | head -1 | sed 's/^[0-9]* //')
+  # Calculate uptime from /proc if available
+  if [[ -d "/proc/$daemon_pid" ]]; then
+    start_time=$(stat -c '%Y' "/proc/$daemon_pid" 2>/dev/null)
+    if [[ -n "$start_time" ]]; then
+      now=$(date +%s)
+      uptime_secs=$((now - start_time))
+      days=$((uptime_secs / 86400))
+      hours=$(( (uptime_secs % 86400) / 3600 ))
+      printf "  ty daemon                     PID %s  %s  uptime %dd %dh\n" "$daemon_pid" "$(echo "$daemon_flags" | grep -o '\-\-dangerous' || echo '--safe')" "$days" "$hours"
+    else
+      printf "  ty daemon                     PID %s  %s\n" "$daemon_pid" "$(echo "$daemon_flags" | grep -o '\-\-dangerous' || echo '--safe')"
+    fi
+  else
+    printf "  ty daemon                     PID %s  %s\n" "$daemon_pid" "$(echo "$daemon_flags" | grep -o '\-\-dangerous' || echo '--safe')"
+  fi
+else
+  echo "  ty daemon                     NOT RUNNING"
+fi
+
+# Claude agent sessions
+tmux_sessions=$(tmux list-sessions 2>/dev/null | grep -c "task-daemon" || echo "0")
+printf "  claude agents                 %s active tmux sessions\n" "$tmux_sessions"
+
+# Other notable processes
+node_procs=$(pgrep -c node 2>/dev/null || echo "0")
+printf "  node processes                %s running\n" "$node_procs"
+
+# ── Check 7: File Permissions ────────────────────────────────────────────────
+
+header "FILE PERMISSIONS"
+
+perm_warnings=0
+
+check_file_perms() {
+  local file="$1"
+  local label="$2"
+  if [[ -f "$file" ]]; then
+    local perms
+    perms=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null)
+    if [[ "$perms" != "600" && "$perms" != "0600" && "$perms" != "700" && "$perms" != "0700" ]]; then
+      printf "  %-40s %s [should be 0600]\n" "$label" "$perms"
+      perm_warnings=$((perm_warnings + 1))
+    fi
+  fi
+}
+
+# Check all known sensitive files
+for envfile in "${KNOWN_ENV_FILES[@]}"; do
+  envfile=$(eval echo "$envfile")
+  [[ -z "$envfile" ]] && continue
+  rel="${envfile#$SERVER_HOME/}"
+  check_file_perms "$envfile" "$rel"
+done
+
+check_file_perms "$HOME/.claude/.credentials.json" "~/.claude/.credentials.json"
+check_file_perms "$HOME/.claude.json" "~/.claude.json"
+check_file_perms "$HOME/.git-credentials" "~/.git-credentials"
+
+for f in "$HOME/.ssh"/id_*; do
+  [[ -f "$f" ]] || continue
+  [[ "$f" == *.pub ]] && continue
+  fname=$(basename "$f")
+  check_file_perms "$f" "~/.ssh/$fname"
+done
+
+if [[ $perm_warnings -eq 0 ]]; then
+  echo "  All sensitive files have correct permissions"
+else
+  echo ""
+  printf "  %d file(s) with permission warnings\n" "$perm_warnings"
+fi
+
+# ── Check 8: Cron Jobs ──────────────────────────────────────────────────────
+
+header "CRON JOBS"
+
+cron_output=$(crontab -l 2>/dev/null)
+if [[ -n "$cron_output" ]]; then
+  cron_count=$(echo "$cron_output" | grep -cv '^#\|^$' || echo 0)
+  echo "$cron_output" | grep -v '^#\|^$' | while IFS= read -r line; do
+    printf "  %s\n" "$line"
+  done
+  echo ""
+  printf "  Total: %s cron job(s)\n" "$cron_count"
+else
+  echo "  (no cron jobs)"
+fi
+
+# ── Check 9: Listening Ports ────────────────────────────────────────────────
+
+header "LISTENING PORTS"
+
+if command -v ss &>/dev/null; then
+  ports=$(ss -tlnp 2>/dev/null | tail -n +2)
+elif command -v netstat &>/dev/null; then
+  ports=$(netstat -tlnp 2>/dev/null | tail -n +3)
+else
+  ports=""
+fi
+
+if [[ -n "$ports" ]]; then
+  port_count=$(echo "$ports" | wc -l | tr -d ' ')
+  echo "$ports" | while IFS= read -r line; do
+    printf "  %s\n" "$line"
+  done
+  echo ""
+  printf "  Total: %s listening port(s)\n" "$port_count"
+else
+  echo "  (no listening ports detected, or ss/netstat not available)"
+fi
+
+# ── Footer ───────────────────────────────────────────────────────────────────
+
+echo ""
+echo "=== END SECURITY AUDIT ==="
