@@ -110,6 +110,7 @@ These are configured via flags in `config.env` during setup. They're part of the
 - **Linear** (`LINEAR_ENABLED=true`) — Agent-to-human handoff via Linear issues, plus `@agent` comments for revisions
 - **Cloudflare R2** (`R2_ENABLED=true`) — Public URLs for files and assets agents generate
 - **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories
+- **nono** (`NONO_ENABLED=true`) — Credential isolation for agents via sandboxed executor wrappers
 
 ## Manual Setup
 
