@@ -34,11 +34,11 @@ Your Mac                          Server
 │ Claude Code  │ ──── SSH ─────→  │ TaskYou daemon   │
 │ (GM session) │                  │ ┌──────────────┐ │
 │              │                  │ │ Agent 1      │ │
-│ SwiftBar     │ ←── poll ─────── │ │ Agent 2      │ │
-│ (menu bar)   │                  │ │ ...          │ │
+│              │                  │ │ Agent 2      │ │
+│              │                  │ │ ...          │ │
 │              │                  │ └──────────────┘ │
-│ launchd      │                  │                  │
-│ (monitor)    │                  │ notifications    │
+│              │                  │                  │
+│              │                  │ notifications    │
 └──────────────┘                  │ .jsonl           │
                                   └──────────────────┘
 ```
@@ -47,8 +47,7 @@ Your Mac                          Server
 - The GM creates tasks and assigns them to **agents** on the server
 - Agents work in the background — close your laptop, they keep going
 - The GM **automatically tracks running tasks** and notifies you when they complete or get blocked — no need to remember to check
-- Use `/babysit` for an immediate status check on all tracked tasks
-- Optional menu bar widget shows live agent status
+- Use `/gm-babysit` for an immediate status check on all tracked tasks
 
 ## exe.dev Deployment (No Local Machine Required)
 
@@ -83,14 +82,13 @@ This creates the VM, uploads everything, and prints the URL. Share access with t
 
 ## Keeping Your GM Up to Date
 
-When new features are added (like `/babysit`), run `/taskyou-os:doctor` in any GM. It detects new commands and CLAUDE.md sections available from the plugin and offers to add them — without overwriting your customizations.
+When new features are added (like `/gm-babysit`), run `/taskyou-os:doctor` in any GM. It detects new commands and CLAUDE.md sections available from the plugin and offers to add them — without overwriting your customizations.
 
 ## Optional Integrations
 
 - **Linear** — Escalate tasks that need human attention to your Linear board
 - **Cloudflare R2** — Host files and assets your agents generate
 - **GitHub** — Push agent work to your repositories
-- **SwiftBar** — Menu bar monitoring with auto-resolution of stuck agents
 
 ## Manual Setup
 

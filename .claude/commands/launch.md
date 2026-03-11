@@ -312,14 +312,6 @@ This will:
 1. Create the GM's instruction files, menu bar plugin, and monitoring scripts on your Mac
 2. Set up workspaces, install hooks, and start the agent engine on the server
 
-The script will ask two questions:
-
-**Menu bar status indicator** — Tell the user: "It's asking if you want a small icon in your menu bar that shows what your agents are doing. I'd recommend it if you have SwiftBar installed — say yes. Otherwise, skip it for now."
-
-**Background notifications** — Tell the user: "It's asking if you want to get notifications when agents finish tasks or need your help. I'd recommend saying yes."
-
-Let the user handle these prompts since they're interactive.
-
 ### If setup fails:
 - Connection issues -> re-check Phase 2
 - Missing software -> install it remotely and retry
@@ -402,8 +394,7 @@ Your GM manages a team of AI agents that work in the background. You talk to the
 - You give instructions to the GM (the Claude session on your Mac)
 - The GM creates tasks and assigns them to agents on the server
 - Agents work in the background — you can close your laptop and they keep going
-- When an agent finishes, you'll get a notification (if you enabled the monitor)
-- Check on progress anytime by asking: *"What's the status of my tasks?"*
+- Check on progress anytime by asking: *"What's the status of my tasks?"* or use `/gm-babysit`
 
 **Handy things to ask:**
 - *"Show me all active tasks"* — see what agents are working on
@@ -427,6 +418,4 @@ Diagnose and fix issues yourself when possible. Do not show these details to the
   2. Claude first-run setup screens (theme picker, keybinding prompt) are blocking. Fix: `ssh <HOST> 'echo "{\"hasCompletedOnboarding\":true,\"theme\":\"dark\",\"shiftEnterKeyBindingInstalled\":true}" > ~/.claude.json'`
   3. Claude trust/permissions dialogs haven't been pre-accepted for that workspace. The `task.started` hook should handle this automatically. If it's not working, manually inject trust: `ssh <HOST> "python3 -c \"import json; cf='$HOME/.claude.json'; data=json.load(open(cf)); data.setdefault('projects',{}).setdefault('<WORKTREE_PATH>',{}).update({'hasTrustDialogAccepted':True,'hasCompletedProjectOnboarding':True}); json.dump(data,open(cf,'w'),indent=2)\""`
 - **Tasks stuck for other reasons:** `ssh <HOST> 'tmux capture-pane -t task-<ID> -p'` — look for auth errors, rate limits, or network issues
-- **Menu bar not updating:** Check SwiftBar is running and the plugin is in `~/Library/Application Support/SwiftBar/`
 - **Node not found:** Templates hardcode a PATH — check where node is: `ssh <HOST> 'which node'` and update rendered templates if needed
-- **Monitor not firing:** `launchctl list | grep <PROJECT_NAME>` — load manually if needed
