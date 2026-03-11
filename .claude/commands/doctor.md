@@ -237,6 +237,61 @@ ssh "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" &
 
 ---
 
+### Check 6: GM Templates Up to Date
+
+Check if the GM has the latest commands and template content from the plugin.
+
+**Steps:**
+
+1. Find the plugin's installed template directory:
+```bash
+PLUGIN_DIR=$(python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/installed_plugins.json')); entries=d.get('plugins',{}).get('taskyou-os@taskyou-os',[]); print(entries[0]['installPath'] if entries else '')" 2>/dev/null)
+echo "Plugin dir: $PLUGIN_DIR"
+```
+
+2. List the command templates available in the plugin vs commands installed in the GM:
+```bash
+echo "=== Plugin templates ==="
+ls "$PLUGIN_DIR/templates/commands/" 2>/dev/null | sed 's/.md.tmpl$//'
+
+echo "=== GM commands ==="
+ls "$LOCAL_PROJECT_DIR/.claude/commands/" 2>/dev/null | sed 's/.md$//'
+```
+
+3. **For each command template that does NOT exist in the GM** (new commands):
+   - This is a new command added since the GM was set up
+   - Render it by sourcing the GM's `config.env` and using setup.sh's render function:
+   ```bash
+   source "$CONFIG"
+   cd "$(dirname "$CONFIG")/.."
+   bash -c 'source setup.sh 2>/dev/null; source "'"$CONFIG"'"; render_file "'"$PLUGIN_DIR"'/templates/commands/NEW_CMD.md.tmpl" "/tmp/taskyou-doctor-new-cmd.md"' 2>/dev/null
+   ```
+   If the render_file approach doesn't work, do simple `{{VARIABLE}}` substitution yourself using the config values.
+   - **Show the user what the command does** (read the rendered file and summarize it)
+   - **Ask the user** if they want to add it to their GM
+   - If yes, copy the rendered file to `$LOCAL_PROJECT_DIR/.claude/commands/`
+
+4. **For CLAUDE.md** — check if the plugin's template has new sections the GM is missing:
+   - Read the plugin's `$PLUGIN_DIR/templates/CLAUDE.md.tmpl`
+   - Read the GM's `$LOCAL_PROJECT_DIR/CLAUDE.md`
+   - Compare section headers (`## ` lines) between the template and the GM's file
+   - For each section in the template that does NOT exist in the GM's CLAUDE.md:
+     - Render that section (substitute `{{VARIABLE}}` placeholders using config.env values)
+     - **Show the user** the new section content and where it would logically go
+     - **Ask the user** if they want to add it
+     - If yes, insert it at the appropriate location in the GM's CLAUDE.md
+   - Do NOT touch or overwrite existing sections — only offer to add new ones
+
+5. **For existing commands that differ from the template**: Note which commands have upstream changes available, but do NOT overwrite them. Just inform the user: "The template for /gm-status has been updated. You may want to review the changes."
+
+**Important:** Always ask before modifying any file. Never overwrite a file that the user may have customized.
+
+**If no new templates/sections found:** Report PASS with "GM templates are up to date."
+**If new commands/sections were added:** Report WARN with summary of what was added.
+**If user declined updates:** Report WARN with "Updates available but skipped."
+
+---
+
 ## Summary
 
 After all checks, present a summary table:
@@ -249,6 +304,7 @@ TaskYou-OS Doctor
   Daemon running     PASS/WARN/FAIL
   Daemon mode        PASS/WARN/FAIL
   Executor health    PASS/WARN/FAIL
+  GM templates       PASS/WARN/FAIL
 ─────────────────────────────────
 ```
 
