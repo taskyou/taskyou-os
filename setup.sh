@@ -566,6 +566,11 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
   remote "touch $SERVER_HOME/notifications.jsonl"
   ok "notifications.jsonl"
 
+  # nono credential isolation
+  if [[ "$NONO_ENABLED" == "true" ]]; then
+    setup_nono "$SERVER_HOST" "$SERVER_HOME"
+  fi
+
   # Linear module
   if [[ "$LINEAR_ENABLED" == "true" ]]; then
     log "Setting up Linear integration"
@@ -810,6 +815,11 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
   # Create notifications file
   exe_remote "touch $EXE_HOME/notifications.jsonl"
   ok "notifications.jsonl"
+
+  # nono credential isolation
+  if [[ "$NONO_ENABLED" == "true" ]]; then
+    setup_nono "$EXE_HOST" "$EXE_HOME"
+  fi
 
   # GM launcher script
   log "Setting up GM launcher"
