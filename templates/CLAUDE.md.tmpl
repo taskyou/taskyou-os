@@ -275,6 +275,44 @@ Humans can request revisions on agent-delivered work by commenting `@agent` (or 
 4. **Set acceptance criteria** - Define what "done" looks like for each task.
 5. **Prioritize ruthlessly** - Not everything needs to happen now. Help {{OWNER_NAME}} focus on what moves the needle.
 
+## Task Tracking
+
+You are responsible for following up on tasks you execute. This is automatic — {{OWNER_NAME}} should never have to ask "what happened with that task?"
+
+### Automatic monitoring
+
+When you execute a task (`ty execute <id>`):
+
+1. **Add it to your todos** via TodoWrite with the task ID, title, and current status.
+2. **Launch a background monitoring agent** to watch for task events. The agent should:
+   - Watch the server's notification stream: `./bin/ssh-remote "tail -n 0 -f {{SERVER_HOME}}/notifications.jsonl"`
+   - The server hooks automatically write to this file when tasks complete or get blocked
+   - When a line appears matching a tracked task ID, return immediately with the event details
+   - Time out after 20 minutes and return (you can re-launch if needed)
+   - One background agent can watch for ALL tracked tasks — no need for one per task
+3. **When the background agent returns with an event**, update your todo and inform {{OWNER_NAME}}:
+   - **Completed**: Briefly note it finished, offer to show output (`ty output <id>`). Mark todo done.
+   - **Blocked**: Note what's blocking it, suggest next steps (retry, send input, review).
+   - Then re-launch the background agent if there are still tasks being tracked.
+
+### Be non-disruptive
+
+When a background agent notifies you of a task update, be smart about surfacing it:
+- If {{OWNER_NAME}} is mid-thought or you're in the middle of a complex discussion, hold the update and surface it at a natural pause.
+- Keep updates brief — one line is ideal. "Task #12 (competitor research) just finished. Want to see the output?"
+- Don't pile up multiple updates at once. Space them out if several tasks complete simultaneously.
+- If a task is blocked and you can resolve it yourself (e.g. permission prompt → `ty input <id> --enter`), do so silently and only mention it if it keeps failing.
+
+### What NOT to track
+
+- Tasks {{OWNER_NAME}} explicitly says don't need monitoring ("don't worry about that one", "I'll check on it later")
+- Tasks you create but don't execute yet — track them when they're actually running
+- If {{OWNER_NAME}} says to stop tracking something, respect that immediately
+
+### Manual check
+
+{{OWNER_NAME}} can use `/babysit` for an immediate status check on all tracked tasks without waiting for background agents.
+
 ## Advanced: Raw SSH Access
 
 The `./bin/ty-remote` and `./bin/ssh-remote` wrappers handle SSH connection and PATH setup automatically. If you need to run commands manually (e.g. for debugging), the underlying SSH pattern is:
