@@ -6,6 +6,15 @@
 CLAUDE_JSON="$HOME/.claude.json"
 WORKTREE_PATH="${WORKTREE_PATH:-}"
 
+# Fallback: if WORKTREE_PATH not provided, find it from TASK_ID + TASK_PROJECT
+if [[ -z "$WORKTREE_PATH" && -n "${TASK_ID:-}" && -n "${TASK_PROJECT:-}" ]]; then
+  DATA_DIR="$HOME/.local/share/task/${TASK_PROJECT}"
+  # Find the worktree directory matching this task ID
+  for dir in "$DATA_DIR"/.task-worktrees/"${TASK_ID}"-*/; do
+    [[ -d "$dir" ]] && WORKTREE_PATH="${dir%/}" && break
+  done
+fi
+
 [[ -z "$WORKTREE_PATH" ]] && exit 0
 [[ ! -f "$CLAUDE_JSON" ]] && exit 0
 
