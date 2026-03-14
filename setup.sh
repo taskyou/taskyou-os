@@ -357,39 +357,74 @@ setup_nono() {
     ok "nono installed"
   fi
 
-  # Ensure libsecret is available for Secret Service credential storage
-  ssh "$ssh_target" "command -v secret-tool" >/dev/null 2>&1 || {
-    log "Installing libsecret-tools"
-    ssh "$ssh_target" "sudo apt-get update -qq && sudo apt-get install -y -qq libsecret-tools" || {
-      warn "Could not install libsecret-tools. secret-tool is required for credential storage."
-      return 1
-    }
-  }
-  ok "secret-tool available"
+  # Detect whether Secret Service (D-Bus) is available
+  # On headless servers (e.g. exe.dev VMs), secret-tool won't work
+  local has_secret_service=false
+  if ssh "$ssh_target" 'command -v secret-tool >/dev/null 2>&1 && secret-tool store --label="nono-test" service nono-test username test <<< "test" 2>/dev/null && secret-tool lookup service nono-test username test >/dev/null 2>&1' 2>/dev/null; then
+    has_secret_service=true
+    # Clean up test entry
+    ssh "$ssh_target" 'secret-tool clear service nono-test username test' 2>/dev/null || true
+    ok "Secret Service available"
+  else
+    warn "Secret Service not available (headless) — using secrets.env fallback"
+  fi
 
-  # Store credentials in Linux Secret Service
+  # Store credentials
   if [[ -n "$NONO_CREDENTIALS" ]]; then
-    log "Storing credentials in Secret Service"
-    IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
-    for entry in "${creds[@]}"; do
-      local name env_var value
-      name=$(echo "$entry" | cut -d: -f1 | xargs)
-      env_var=$(echo "$entry" | cut -d: -f2 | xargs)
-      value="${!env_var:-}"
+    if $has_secret_service; then
+      log "Storing credentials in Secret Service"
+      IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
+      for entry in "${creds[@]}"; do
+        local name env_var value
+        name=$(echo "$entry" | cut -d: -f1 | xargs)
+        env_var=$(echo "$entry" | cut -d: -f2 | xargs)
+        value="${!env_var:-}"
 
-      if [[ -z "$value" ]]; then
-        warn "Skipping $name: $env_var is empty in config.env"
-        continue
-      fi
+        if [[ -z "$value" ]]; then
+          warn "Skipping $name: $env_var is empty in config.env"
+          continue
+        fi
 
-      # Store in Secret Service under service=nono
-      # Pipe value via stdin to avoid shell injection from special characters in credentials
-      printf '%s' "$value" | ssh "$ssh_target" "secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
-        warn "Failed to store $name — secret-tool may need a D-Bus session"
-        continue
-      }
-      ok "credential: $name (from $env_var)"
-    done
+        # Pipe value via stdin to avoid credentials in process list
+        printf '%s' "$value" | ssh "$ssh_target" "secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
+          warn "Failed to store $name — secret-tool may need a D-Bus session"
+          continue
+        }
+        ok "credential: $name (from $env_var)"
+      done
+    else
+      log "Storing credentials in secrets.env (headless fallback)"
+      local secrets_content=""
+      IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
+      for entry in "${creds[@]}"; do
+        local name env_var value
+        name=$(echo "$entry" | cut -d: -f1 | xargs)
+        env_var=$(echo "$entry" | cut -d: -f2 | xargs)
+        value="${!env_var:-}"
+
+        if [[ -z "$value" ]]; then
+          warn "Skipping $name: $env_var is empty in config.env"
+          continue
+        fi
+
+        secrets_content+="${name}=${value}"$'\n'
+        ok "credential: $name (from $env_var)"
+      done
+
+      # Write via stdin to avoid credentials in process list
+      printf '%s' "$secrets_content" | ssh "$ssh_target" "mkdir -p $remote_home/.config/nono && cat > $remote_home/.config/nono/secrets.env && chmod 600 $remote_home/.config/nono/secrets.env"
+      ok "secrets.env written (chmod 600)"
+    fi
+  fi
+
+  # Git credential helper for sandboxed executors
+  log "Configuring git credential helper"
+  if ssh "$ssh_target" "test -x /usr/bin/gh" 2>/dev/null; then
+    ssh "$ssh_target" "git config --global credential.helper '!/usr/bin/gh auth git-credential'"
+    ok "git credential helper: gh (full path for sandbox)"
+  else
+    ssh "$ssh_target" "git config --global credential.helper store"
+    ok "git credential helper: store (gh not installed)"
   fi
 
   # Deploy nono profile (JSON format required by nono)
@@ -400,8 +435,17 @@ setup_nono() {
   rm -f "/tmp/taskyou-nono-profile.json"
   ok "profile: taskyou-agent"
 
-  # Deploy executor wrappers
-  log "Deploying executor wrappers"
+  # Deploy nono-exec (shared sandbox launcher)
+  log "Deploying nono-exec"
+  ssh "$ssh_target" "mkdir -p $remote_home/.local/bin"
+  render_file "$TEMPLATES_DIR/nono-exec.sh.tmpl" "/tmp/nono-exec.sh"
+  scp -q "/tmp/nono-exec.sh" "$ssh_target:$remote_home/.local/bin/nono-exec"
+  ssh "$ssh_target" "chmod +x $remote_home/.local/bin/nono-exec"
+  rm -f "/tmp/nono-exec.sh"
+  ok "nono-exec"
+
+  # Deploy thin executor stubs
+  log "Deploying executor stubs"
   ssh "$ssh_target" "mkdir -p $remote_home/bin"
 
   for executor in claude codex gemini openclaw opencode pi; do
@@ -410,14 +454,11 @@ setup_nono() {
       continue  # Skip executors that aren't installed
     fi
 
-    (
-    export EXECUTOR_BIN="$executor"
-    render_file "$TEMPLATES_DIR/nono-wrapper.sh.tmpl" "/tmp/nono-wrapper-$executor.sh"
-    )
-    scp -q "/tmp/nono-wrapper-$executor.sh" "$ssh_target:$remote_home/bin/$executor"
+    render_file "$TEMPLATES_DIR/nono-stub.sh.tmpl" "/tmp/nono-stub-$executor.sh"
+    scp -q "/tmp/nono-stub-$executor.sh" "$ssh_target:$remote_home/bin/$executor"
     ssh "$ssh_target" "chmod +x $remote_home/bin/$executor"
-    rm -f "/tmp/nono-wrapper-$executor.sh"
-    ok "wrapper: ~/bin/$executor"
+    rm -f "/tmp/nono-stub-$executor.sh"
+    ok "stub: ~/bin/$executor"
   done
 
   # Ensure ~/bin and ~/.local/bin are in PATH
