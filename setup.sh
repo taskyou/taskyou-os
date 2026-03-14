@@ -481,6 +481,42 @@ setup_nono() {
   log "nono credential isolation setup complete"
 }
 
+# ── Daemon systemd service ────────────────────────────────────────────────────
+
+install_daemon_service() {
+  local ssh_target="$1"
+  local remote_home="$2"
+
+  log "Installing TaskYou daemon service"
+
+  # Stop any existing ad-hoc daemon process (from old nohup-based setup)
+  ssh "$ssh_target" 'pkill -f "ty daemon" 2>/dev/null; sleep 1' || true
+
+  # Create log directory
+  ssh "$ssh_target" "mkdir -p $remote_home/log"
+
+  # Deploy systemd user service
+  ssh "$ssh_target" "mkdir -p $remote_home/.config/systemd/user"
+  scp -q "$TEMPLATES_DIR/ty-daemon.service.tmpl" "$ssh_target:$remote_home/.config/systemd/user/ty-daemon.service"
+
+  # Enable lingering so the service starts at boot without a login session
+  ssh "$ssh_target" "sudo loginctl enable-linger \$(whoami) 2>/dev/null" || {
+    warn "Could not enable linger — daemon won't auto-start on boot without a login session"
+  }
+
+  # Reload, enable, and start
+  ssh "$ssh_target" "systemctl --user daemon-reload && systemctl --user enable ty-daemon"
+  ssh "$ssh_target" "systemctl --user start ty-daemon"
+  sleep 2
+
+  if ssh "$ssh_target" "systemctl --user is-active ty-daemon" 2>/dev/null | grep -q "active"; then
+    ok "Daemon running (systemd user service)"
+    ok "Logs: $remote_home/log/ty-daemon.log"
+  else
+    warn "Daemon service may not have started. Debug with: ssh $ssh_target 'systemctl --user status ty-daemon'"
+  fi
+}
+
 # ── Server setup ─────────────────────────────────────────────────────────────
 
 setup_server() {
@@ -654,21 +690,8 @@ EOF
   rm -f "/tmp/taskyou-audit.sh"
   ok "audit.sh"
 
-  # Start daemon (with ~/bin and ~/.local/bin in PATH so tmux sessions inherit it)
-  # This is critical: the daemon spawns tmux panes that run executors.
-  # If ~/bin isn't in PATH, nono wrappers are bypassed entirely.
-  log "Starting TaskYou daemon"
-  if remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
-    ok "Daemon already running"
-  else
-    remote "export PATH=$SERVER_HOME/bin:$SERVER_HOME/.local/bin:\$PATH && nohup $SERVER_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
-    sleep 2
-    if remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
-      ok "Daemon started"
-    else
-      warn "Daemon may not have started. Check with: ssh $SERVER_HOST 'ty daemon status'"
-    fi
-  fi
+  # Install daemon as a systemd user service (auto-starts on boot, restarts on crash)
+  install_daemon_service "$SERVER_HOST" "$SERVER_HOME"
 
   log "Server setup complete"
 }
@@ -1000,21 +1023,8 @@ EOF
   rm -f "/tmp/taskyou-audit.sh"
   ok "audit.sh"
 
-  # Start TaskYou daemon (with ~/bin and ~/.local/bin in PATH so tmux sessions inherit it)
-  # This is critical: the daemon spawns tmux panes that run executors.
-  # If ~/bin isn't in PATH, nono wrappers are bypassed entirely.
-  log "Starting TaskYou daemon"
-  if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
-    ok "Daemon already running"
-  else
-    exe_remote "export PATH=$EXE_HOME/bin:$EXE_HOME/.local/bin:\$PATH && nohup $EXE_HOME/.local/bin/ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &"
-    sleep 2
-    if exe_remote_with_path "ty daemon status" 2>/dev/null | grep -q "running"; then
-      ok "Daemon started"
-    else
-      warn "Daemon may not have started. Check with: ssh $EXE_HOST 'ty daemon status'"
-    fi
-  fi
+  # Install daemon as a systemd user service (auto-starts on boot, restarts on crash)
+  install_daemon_service "$EXE_HOST" "$EXE_HOME"
 
   log "exe.dev deployment complete!"
   echo ""

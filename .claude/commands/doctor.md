@@ -124,26 +124,41 @@ ssh "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" &
 
 ### Check 3: TaskYou Daemon Running
 
-Check if the TaskYou daemon is running.
+Check if the TaskYou daemon is running, preferring the systemd user service.
 
 **Steps:**
 
-1. Check locally:
+1. Check if the systemd user service exists on the remote server:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'systemctl --user status ty-daemon 2>/dev/null' 2>/dev/null
+```
+
+2. If the service exists, check its status:
+   - **active (running):** Report PASS with "Daemon running via systemd service"
+   - **inactive/failed:** Try to start it:
+     ```bash
+     ssh "$SERVER_HOST" 'systemctl --user start ty-daemon'
+     ```
+     Then verify. Report WARN if started, FAIL if it won't start (show `systemctl --user status ty-daemon` output).
+
+3. If no systemd service exists, fall back to checking for an ad-hoc process:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'pgrep -af "ty daemon" 2>/dev/null || echo "NO_DAEMON_PROCESS"' 2>/dev/null
+```
+   - If an ad-hoc process is running, report WARN: "Daemon is running but not managed by systemd. Re-run setup to install the systemd service for auto-start on boot and crash recovery."
+   - If nothing is running, report FAIL and offer to start it.
+
+4. Check locally:
 ```bash
 ty daemon status 2>/dev/null
 pgrep -af "ty daemon" 2>/dev/null || echo "NO_DAEMON_PROCESS"
 ```
 
-2. Check on the remote server:
+5. Verify lingering is enabled (required for boot-time start without login):
 ```bash
-ssh -o ConnectTimeout=5 "$SERVER_HOST" 'pgrep -af "ty daemon" 2>/dev/null || echo "NO_DAEMON_PROCESS"' 2>/dev/null
-ssh -o ConnectTimeout=5 "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && ty daemon status 2>/dev/null' 2>/dev/null
+ssh "$SERVER_HOST" 'ls /var/lib/systemd/linger/$(whoami) 2>/dev/null && echo "LINGER_ENABLED" || echo "LINGER_DISABLED"'
 ```
-
-**If not running and there's a remote server:** Start it automatically (in dangerous mode if exe.dev):
-```bash
-ssh "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && nohup ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'
-```
+   - If disabled, report WARN and fix: `ssh "$SERVER_HOST" 'sudo loginctl enable-linger $(whoami)'`
 
 **If not running locally:** Report WARN and note the daemon isn't running. Offer to start it.
 
@@ -157,20 +172,25 @@ Check whether the remote daemon is running in dangerous mode.
 
 **Steps:**
 
-1. Check the daemon process flags on the remote server:
+1. Check via systemd service (preferred):
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'systemctl --user cat ty-daemon 2>/dev/null | grep ExecStart' 2>/dev/null
+```
+
+2. Fall back to checking process flags if no systemd service:
 ```bash
 ssh -o ConnectTimeout=5 "$SERVER_HOST" 'pgrep -af "ty daemon"' 2>/dev/null
 ```
 
-2. Look for `--dangerous` in the process args.
+3. Look for `--dangerous` in the ExecStart line or process args.
 
 **If on an exe.dev server and NOT in dangerous mode:** Report WARN. Explain: "Your agents run on an isolated exe.dev server, so dangerous mode is safe and recommended — without it, agents get stuck on permission prompts." Fix it automatically:
 ```bash
-ssh "$SERVER_HOST" 'pkill -f "ty daemon"; sleep 2; export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && nohup ty daemon --dangerous > /tmp/ty-daemon.log 2>&1 &'
+ssh "$SERVER_HOST" 'systemctl --user restart ty-daemon'
 ```
 Wait a moment, then verify the daemon restarted:
 ```bash
-ssh "$SERVER_HOST" 'sleep 1 && pgrep -af "ty daemon"' 2>/dev/null
+ssh "$SERVER_HOST" 'systemctl --user is-active ty-daemon' 2>/dev/null
 ```
 
 **If in dangerous mode on exe.dev:** Report PASS.
