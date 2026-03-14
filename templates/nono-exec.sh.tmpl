@@ -1,0 +1,82 @@
+#!/bin/bash
+# nono-exec — shared sandbox launcher for TaskYou-OS executors
+# Deployed to ~/.local/bin/nono-exec by setup.sh — do not edit manually
+#
+# All sandbox logic lives here. Per-executor stubs in ~/bin/ delegate
+# to this script, so routine fixes only require updating one file.
+
+set -euo pipefail
+
+EXECUTOR_BIN="$1"
+shift
+
+# Ensure ~/.local/bin is in PATH (for ty, nono, etc.)
+# Daemon-spawned tmux panes may have a minimal PATH that skips .bashrc
+export PATH="$HOME/.local/bin:$PATH"
+
+# ── 1. Find real binary ──────────────────────────────────────────────────────
+# Search PATH without ~/bin to find the actual binary (not our stub)
+REAL_BIN=$(PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^$HOME/bin$" | tr '\n' ':' | sed 's/:$//') which "$EXECUTOR_BIN" 2>/dev/null)
+
+if [ -z "$REAL_BIN" ]; then
+    echo "Error: $EXECUTOR_BIN not found in PATH (excluding ~/bin)" >&2
+    echo "Install $EXECUTOR_BIN or check your PATH." >&2
+    exit 1
+fi
+
+# ── 2. Source secrets ─────────────────────────────────────────────────────────
+# If headless credential fallback is in use, source the secrets file.
+# This happens before the sandbox applies, so env vars are available to nono's
+# credential proxy.
+if [ -f "$HOME/.config/nono/secrets.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$HOME/.config/nono/secrets.env"
+    set +a
+fi
+
+# ── 3. Build nono flags ──────────────────────────────────────────────────────
+NONO_FLAGS=(--profile taskyou-agent --allow-cwd)
+{{#NONO_PROXY_HOSTS}}
+read -ra _proxy_args <<< "{{NONO_PROXY_FLAGS}}"
+NONO_FLAGS+=("${_proxy_args[@]}")
+{{/NONO_PROXY_HOSTS}}
+
+# ── 4. Worktree .git resolution ──────────────────────────────────────────────
+# If .git is a file (git worktree), the real .git dir is elsewhere.
+# Parse the gitdir pointer and allow the parent repo's .git directory so
+# git operations inside the sandbox work correctly.
+if [ -f .git ]; then
+    GITDIR=$(sed -n 's/^gitdir: //p' .git)
+    if [ -n "$GITDIR" ]; then
+        # Resolve to absolute path
+        GITDIR=$(cd "$(dirname "$GITDIR")" && pwd)/$(basename "$GITDIR")
+        # Allow the parent .git dir (two levels up from worktrees/<name>)
+        PARENT_GIT=$(dirname "$(dirname "$GITDIR")")
+        NONO_FLAGS+=(--allow "$PARENT_GIT")
+    fi
+fi
+
+# ── 5. Rewrite --append-system-prompt ─────────────────────────────────────────
+# Some executors accept inline prompt text via --append-system-prompt, but nono
+# can't pass large inline strings through its arg proxy. Write the prompt text
+# to a temp file and swap the flag.
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --append-system-prompt)
+            shift
+            PROMPT_FILE=$(mktemp /tmp/nono-prompt-XXXXXX.txt)
+            printf '%s' "$1" > "$PROMPT_FILE"
+            ARGS+=(--append-system-prompt-file "$PROMPT_FILE")
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# ── 6. Launch sandboxed executor ──────────────────────────────────────────────
+exec nono run "${NONO_FLAGS[@]}" -- "$REAL_BIN" "${ARGS[@]}"
