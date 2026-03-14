@@ -2,16 +2,13 @@
   "meta": {
     "name": "taskyou-agent",
     "version": "1.0.0",
-    "description": "TaskYou agent sandbox with credential isolation"
-  },
-  "security": {
-    "groups": ["claude-code", "node_runtime"]
+    "description": "TaskYou agent sandbox with credential isolation",
+    "extends": "claude-code"
   },
   "workdir": {
     "access": "readwrite"
   },
   "filesystem": {
-    "allow": ["$HOME/projects"],
     "read": [
       "$HOME/.config/task",
       "$HOME/.claude",
