@@ -103,6 +103,43 @@ These run from the taskyou-os plugin context (not inside a GM):
 
 Run `/doctor` periodically to keep things healthy. It also detects new commands available from the plugin and offers to add them to existing GMs.
 
+## Updating
+
+### Update the Plugin
+
+The taskyou-os plugin updates through the Claude Code marketplace. Run:
+
+```
+/plugin marketplace add taskyou/taskyou-os
+```
+
+This pulls the latest version. Restart Claude Code afterward for changes to take effect.
+
+### Update a GM Installation
+
+Run `/taskyou-os:doctor` from any directory. It checks and updates everything automatically:
+
+1. **Plugin version** — pulls the latest from the marketplace and updates the local cache
+2. **TaskYou binary** — upgrades `ty` locally and on your server via `ty upgrade`
+3. **Daemon health** — verifies the daemon is running, restarts it if needed
+4. **Executor health** — confirms every active task has a running executor pane, recovers orphaned tasks
+5. **Command migration** — removes old local command files that shadow newer plugin-delivered versions
+6. **CLAUDE.md drift** — detects new sections in the plugin template and offers to add them to your GM
+7. **Security audit** — runs the server-side credential and permissions check
+8. **Credential isolation** — verifies nono sandbox setup and detects template drift
+
+If `/doctor` finds issues, it fixes what it can and tells you what to do for the rest.
+
+### Update the Server
+
+If you need to re-deploy server-side files (hooks, scripts, nono config) after a plugin update:
+
+```bash
+./setup.sh server ~/Projects/gms/myproject
+```
+
+This re-renders templates from your `config.env` and uploads them. It won't touch your data or running tasks.
+
 ## Built-in Modules
 
 These are configured via flags in `config.env` during setup. They're part of the repo, not separate installs.
