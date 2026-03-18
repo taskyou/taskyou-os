@@ -1,0 +1,16 @@
+[Unit]
+Description=TaskYou API server
+After=network.target ty-daemon.service
+Requires=ty-daemon.service
+
+[Service]
+Type=simple
+Environment="PATH=%h/bin:%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=%h/.local/bin/ty serve --port 8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/log/ty-serve.log
+StandardError=append:%h/log/ty-serve.log
+
+[Install]
+WantedBy=default.target

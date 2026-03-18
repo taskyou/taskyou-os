@@ -1,0 +1,16 @@
+[Unit]
+Description=TaskYou web board
+After=network.target ty-serve.service
+Requires=ty-serve.service
+
+[Service]
+Type=simple
+Environment="PATH=%h/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=%h/.local/bin/ty-web --port 8000 --api http://localhost:8080
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/log/ty-web.log
+StandardError=append:%h/log/ty-web.log
+
+[Install]
+WantedBy=default.target
