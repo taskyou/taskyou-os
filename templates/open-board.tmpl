@@ -1,10 +1,3 @@
 #!/usr/bin/env bash
-osascript <<'EOF'
-tell application "iTerm"
-  activate
-  set newWindow to (create window with default profile)
-  tell current session of newWindow
-    write text "ssh -t {{SERVER_HOST}} 'export PATH={{SERVER_HOME}}/.npm-global/bin:{{SERVER_HOME}}/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:$PATH && ty board'"
-  end tell
-end tell
-EOF
+# Open the ty-web board in the default browser
+open "https://{{EXE_DEV_VM_NAME}}.exe.xyz"

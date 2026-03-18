@@ -893,62 +893,48 @@ BASHRC_EOF
     ok "bashrc hook installed"
   fi
 
-  # Board refresh daemon
-  log "Setting up board refresh daemon"
-  render_file "$TEMPLATES_DIR/exe-dev/board-refresh.tmpl" "/tmp/taskyou-exe-dev-board-refresh"
-  scp -q "/tmp/taskyou-exe-dev-board-refresh" "$EXE_HOST:$EXE_HOME/bin/board-refresh"
-  exe_remote "chmod +x $EXE_HOME/bin/board-refresh"
-  rm -f "/tmp/taskyou-exe-dev-board-refresh"
-  ok "bin/board-refresh"
-
-  # Board refresh crontab (idempotent)
-  local cron_line="@reboot $EXE_HOME/bin/board-refresh"
-  if exe_remote "crontab -l 2>/dev/null" | grep -q "board-refresh"; then
-    ok "board-refresh cron (already installed)"
+  # Install ty-web extension
+  log "Installing ty-web"
+  if exe_remote "test -f $EXE_HOME/.local/bin/ty-web" 2>/dev/null; then
+    ok "ty-web already installed"
   else
-    exe_remote "(crontab -l 2>/dev/null; echo '$cron_line') | crontab -"
-    ok "board-refresh cron installed"
+    # Build from source if Go is available, otherwise download release
+    if exe_remote "command -v go" >/dev/null 2>&1; then
+      exe_remote "GOBIN=$EXE_HOME/.local/bin go install github.com/bborn/workflow/extensions/ty-web/cmd@latest && mv $EXE_HOME/.local/bin/cmd $EXE_HOME/.local/bin/ty-web"
+      ok "ty-web installed (go install)"
+    else
+      exe_remote "curl -fsSL https://taskyou.dev/install-ty-web.sh | bash" || {
+        warn "ty-web install failed. Install it manually."
+        warn "Requires Go: go install github.com/bborn/workflow/extensions/ty-web/cmd@latest"
+      }
+      ok "ty-web installed"
+    fi
   fi
 
-  # Start board-refresh now if not running
-  if exe_remote "pgrep -f board-refresh" >/dev/null 2>&1; then
-    ok "board-refresh already running"
+  # Stop and clean up old board infrastructure (nginx, board-refresh, cron entries)
+  exe_remote "pkill -f board-refresh 2>/dev/null" || true
+  exe_remote "crontab -l 2>/dev/null | grep -v 'board-refresh\|ty serve\|ty-web' | crontab -" 2>/dev/null || true
+  exe_remote "sudo systemctl stop nginx 2>/dev/null; sudo systemctl disable nginx 2>/dev/null" || true
+  exe_remote "rm -f $EXE_HOME/bin/board-refresh" 2>/dev/null || true
+
+  # Deploy ty-serve and ty-web as systemd user services
+  log "Installing ty-serve and ty-web services"
+  exe_remote "mkdir -p $EXE_HOME/.config/systemd/user $EXE_HOME/log"
+
+  scp -q "$TEMPLATES_DIR/ty-serve.service.tmpl" "$EXE_HOST:$EXE_HOME/.config/systemd/user/ty-serve.service"
+  scp -q "$TEMPLATES_DIR/ty-web.service.tmpl" "$EXE_HOST:$EXE_HOME/.config/systemd/user/ty-web.service"
+
+  exe_remote "systemctl --user daemon-reload"
+  exe_remote "systemctl --user enable ty-serve ty-web"
+  exe_remote "systemctl --user restart ty-serve ty-web"
+  sleep 2
+
+  if exe_remote "systemctl --user is-active ty-web" 2>/dev/null | grep -q "active"; then
+    ok "ty-serve + ty-web running (systemd user services)"
+    ok "Board: http://localhost:8000 (proxied via exe.dev)"
   else
-    exe_remote "nohup $EXE_HOME/bin/board-refresh > /tmp/board-refresh.log 2>&1 &"
-    ok "board-refresh started"
+    warn "ty-web may not have started. Debug with: ssh $EXE_HOST 'systemctl --user status ty-web'"
   fi
-
-  # Landing page
-  log "Setting up landing page"
-  exe_remote "sudo mkdir -p /var/www/html"
-  render_file "$TEMPLATES_DIR/exe-dev/landing-page.html.tmpl" "/tmp/taskyou-exe-dev-landing"
-  scp -q "/tmp/taskyou-exe-dev-landing" "$EXE_HOST:/tmp/taskyou-landing.html"
-  exe_remote "sudo mv /tmp/taskyou-landing.html /var/www/html/index.html"
-  rm -f "/tmp/taskyou-exe-dev-landing"
-  ok "landing page"
-
-  # Nginx
-  log "Setting up nginx"
-  # Ensure nginx serves on port 8000
-  exe_remote "sudo tee /etc/nginx/sites-available/default > /dev/null" <<'NGINX_EOF'
-server {
-    listen 8000 default_server;
-    root /var/www/html;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    location /board.json {
-        add_header Cache-Control "no-cache, no-store, must-revalidate";
-        add_header Access-Control-Allow-Origin "*";
-    }
-}
-NGINX_EOF
-  exe_remote "sudo systemctl start nginx && sudo systemctl enable nginx" 2>/dev/null
-  exe_remote "sudo nginx -t && sudo systemctl reload nginx" 2>/dev/null
-  ok "nginx configured (port 8000)"
 
   # Set exe.dev proxy to point at port 8000
   ssh exe.dev "share port $EXE_DEV_VM_NAME 8000" 2>/dev/null || warn "Could not set proxy port. Run: ssh exe.dev share port $EXE_DEV_VM_NAME 8000"
@@ -1028,7 +1014,8 @@ EOF
 
   log "exe.dev deployment complete!"
   echo ""
-  echo "  Landing page:  https://${EXE_DEV_VM_NAME}.exe.xyz"
+  echo "  Task board:    https://${EXE_DEV_VM_NAME}.exe.xyz"
+  echo "  API server:    https://${EXE_DEV_VM_NAME}.exe.xyz/api/status (proxied)"
   echo "  GM terminal:   https://${EXE_DEV_VM_NAME}.xterm.exe.xyz/?name=gm"
   echo "  Shell:         https://${EXE_DEV_VM_NAME}.xterm.exe.xyz/"
   echo ""
