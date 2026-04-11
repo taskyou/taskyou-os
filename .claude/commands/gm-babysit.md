@@ -5,6 +5,8 @@ description: Check on all tracked tasks for an immediate status update
 
 Check on all tasks you're currently tracking. Use this for an immediate status update.
 
+Note: Task events normally arrive automatically via the taskyou channel. This command is for a manual spot-check when you want an immediate snapshot.
+
 First, load the project configuration:
 ```bash
 source ./config.env
@@ -29,8 +31,6 @@ source ./config.env
    - **Blocked**: Explain what's blocking it. Suggest next steps (retry, send input, review output).
    - **Still processing**: Note it's still running — no action needed unless it's been unusually long.
 
-5. **Re-launch the background notification watcher** if there are tasks still in progress and no background agent is currently watching.
-
-6. **If all tracked tasks are done**, let the user know there's nothing left to monitor.
+5. **If all tracked tasks are done**, let the user know there's nothing left to monitor.
 
 Keep updates brief — one line per task.
