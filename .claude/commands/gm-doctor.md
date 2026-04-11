@@ -310,7 +310,82 @@ If `config.env` is missing, report FAIL — the plugin commands won't work witho
 
 ---
 
-### Check 7: Security Audit
+### Check 7: Task Event Channel
+
+Check that the Claude Code channel for push-based task notifications is set up and working.
+
+**Steps:**
+
+1. Check if the channel files exist in the GM directory:
+```bash
+test -f "$LOCAL_PROJECT_DIR/channel/taskyou-channel.ts" && echo "CHANNEL_EXISTS" || echo "CHANNEL_MISSING"
+test -f "$LOCAL_PROJECT_DIR/.mcp.json" && echo "MCP_JSON_EXISTS" || echo "MCP_JSON_MISSING"
+test -d "$LOCAL_PROJECT_DIR/channel/node_modules" && echo "DEPS_INSTALLED" || echo "DEPS_MISSING"
+```
+
+2. **If channel files are missing**, deploy them from the plugin templates:
+
+   a. Find the TaskYou-OS plugin directory (or repo checkout):
+   ```bash
+   TASKYOU_OS_DIR=""
+   if [ -f "./templates/channel/taskyou-channel.ts.tmpl" ]; then
+     TASKYOU_OS_DIR="."
+   else
+     PLUGIN_DIR=$(python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/installed_plugins.json')); entries=d.get('plugins',{}).get('taskyou-os@taskyou-os',[]); print(entries[0]['installPath'] if entries else '')" 2>/dev/null)
+     if [ -n "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/templates/channel/taskyou-channel.ts.tmpl" ]; then
+       TASKYOU_OS_DIR="$PLUGIN_DIR"
+     fi
+   fi
+   ```
+
+   b. If templates are available, render and deploy them. Use `config.env` to substitute variables:
+   ```bash
+   source "$LOCAL_PROJECT_DIR/config.env"
+   mkdir -p "$LOCAL_PROJECT_DIR/channel"
+   ```
+   - Read `$TASKYOU_OS_DIR/templates/channel/taskyou-channel.ts.tmpl`, substitute `{{SERVER_HOST}}` and `{{SERVER_HOME}}` with values from config.env, write to `$LOCAL_PROJECT_DIR/channel/taskyou-channel.ts`
+   - Read `$TASKYOU_OS_DIR/templates/channel/package.json.tmpl`, write to `$LOCAL_PROJECT_DIR/channel/package.json`
+   - Read `$TASKYOU_OS_DIR/templates/mcp.json.tmpl`, write to `$LOCAL_PROJECT_DIR/.mcp.json`
+
+   c. Install dependencies:
+   ```bash
+   cd "$LOCAL_PROJECT_DIR/channel" && bun install --silent
+   ```
+
+   d. Report WARN: "Deployed task event channel. Restart Claude Code to activate."
+
+3. **If channel files exist but deps are missing**, install them:
+   ```bash
+   cd "$LOCAL_PROJECT_DIR/channel" && bun install --silent
+   ```
+   Report WARN: "Installed missing channel dependencies."
+
+4. **If channel exists, check for drift** — compare deployed channel against the plugin template (same approach as nono drift detection in Check 8). If the template is newer, update the deployed file and report WARN.
+
+5. **Check the shell alias** includes `--dangerously-load-development-channels server:taskyou`:
+   ```bash
+   grep "$GM_ALIAS" ~/.zshrc 2>/dev/null || grep "$GM_ALIAS" ~/.bashrc 2>/dev/null
+   ```
+   - If the alias exists but doesn't include `--dangerously-load-development-channels server:taskyou`, report WARN and show the user the updated alias line they should use:
+     ```
+     alias <GM_ALIAS>='cd <LOCAL_PROJECT_DIR> && CLAUDE_CONFIG_DIR=<CONFIG_DIR> claude --dangerously-load-development-channels server:taskyou'
+     ```
+   - If the alias already includes the flag, report PASS.
+
+6. **Check the CLAUDE.md** has the channel-based monitoring section (not the old background-agent approach):
+   ```bash
+   grep -c "Task event channel" "$LOCAL_PROJECT_DIR/CLAUDE.md"
+   grep -c "background monitoring agent" "$LOCAL_PROJECT_DIR/CLAUDE.md"
+   ```
+   - If it has "background monitoring agent" but not "Task event channel", the CLAUDE.md needs updating. Render the Task Tracking section from the template and show the user the diff, offering to update it.
+
+**If all channel files exist, deps installed, alias correct:** Report PASS with "Task event channel active."
+**If deployed or fixed anything:** Report WARN with summary.
+**If templates not found:** Report FAIL with "Channel templates not found. Update the TaskYou-OS plugin first."
+
+---
+
+### Check 8: Security Audit
 
 Run the server-side security audit script to check credentials, permissions, and exposed services.
 
@@ -340,7 +415,7 @@ ssh -o ConnectTimeout=5 "$SERVER_HOST" '$HOME/.local/bin/audit.sh' 2>/dev/null
 
 ---
 
-## Check 8: Credential Isolation (nono)
+## Check 9: Credential Isolation (nono)
 
 This check verifies if nono is set up, and if not, strongly recommends it. Always run this check regardless of whether credentials are currently configured.
 
@@ -441,6 +516,7 @@ TaskYou-OS Doctor
   Daemon mode           PASS/WARN/FAIL
   Executor health       PASS/WARN/FAIL
   GM templates          PASS/WARN/FAIL
+  Task event channel    PASS/WARN/FAIL
   Security audit        PASS/WARN/FAIL
   Credential isolation  PASS/WARN
 ─────────────────────────────────
