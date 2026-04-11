@@ -301,6 +301,20 @@ setup_local() {
   chmod +x "$LOCAL_PROJECT_DIR/bin/${PROJECT_NAME}-open-board"
   ok "bin/${PROJECT_NAME}-open-board"
 
+  # Channel (push-based task event notifications)
+  log "Setting up task event channel"
+  mkdir -p "$LOCAL_PROJECT_DIR/channel"
+  render_file "$TEMPLATES_DIR/channel/taskyou-channel.ts.tmpl" "$LOCAL_PROJECT_DIR/channel/taskyou-channel.ts"
+  ok "channel/taskyou-channel.ts"
+  render_file "$TEMPLATES_DIR/channel/package.json.tmpl" "$LOCAL_PROJECT_DIR/channel/package.json"
+  ok "channel/package.json"
+  # Install channel dependencies
+  (cd "$LOCAL_PROJECT_DIR/channel" && bun install --silent 2>/dev/null) || warn "bun install failed — run 'cd $LOCAL_PROJECT_DIR/channel && bun install' manually"
+
+  # .mcp.json (registers channel with Claude Code)
+  render_file "$TEMPLATES_DIR/mcp.json.tmpl" "$LOCAL_PROJECT_DIR/.mcp.json"
+  ok ".mcp.json"
+
   # R2 wrangler.toml
   if [[ "$R2_ENABLED" == "true" ]]; then
     log "Setting up R2"
@@ -311,7 +325,7 @@ setup_local() {
 
   # Shell alias
   log "Shell alias"
-  local alias_line="alias ${GM_ALIAS}='cd ${LOCAL_PROJECT_DIR} && CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} claude'"
+  local alias_line="alias ${GM_ALIAS}='cd ${LOCAL_PROJECT_DIR} && CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} claude --dangerously-load-development-channels server:taskyou'"
   echo "  Add this to your shell profile (~/.zshrc or ~/.bashrc):"
   echo ""
   echo "    $alias_line"
