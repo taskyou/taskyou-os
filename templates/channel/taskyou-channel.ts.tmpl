@@ -14,6 +14,14 @@ const SERVER_HOST = "{{SERVER_HOST}}";
 const SERVER_HOME = "{{SERVER_HOME}}";
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
 
+// Per-GM event scoping. GM_SLUG identifies this GM (defaults to the GM_ALIAS
+// chosen at setup time). New tasks created through this channel are stamped
+// with --assigned-gm <GM_SLUG>, and emitted notifications are filtered to this
+// GM. SEE_UNASSIGNED controls whether events with no assigned_gm (e.g. tasks
+// created outside the channel, or older ty versions) are still surfaced here.
+const GM_SLUG = process.env.GM_SLUG || process.env.GM_ALIAS || "{{GM_ALIAS}}";
+const SEE_UNASSIGNED = (process.env.SEE_UNASSIGNED ?? "true") !== "false";
+
 // Track where we are in the notifications file
 let lastLineCount = 0;
 
@@ -81,7 +89,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
 
   if (name === "ty_command") {
-    const { args: tyArgs } = args as { args: string };
+    let { args: tyArgs } = args as { args: string };
+    // Scope new tasks to this GM: inject --assigned-gm on `create` (only),
+    // unless the caller already specified one. Idempotent.
+    if (
+      /^\s*create(\s|$)/.test(tyArgs) &&
+      !/--assigned-gm(\s|=)/.test(tyArgs)
+    ) {
+      tyArgs = `${tyArgs} --assigned-gm ${GM_SLUG}`;
+    }
     const result = await runRemote(`ty ${tyArgs}`);
     return { content: [{ type: "text", text: result }] };
   }
@@ -147,24 +163,44 @@ async function pollNotifications() {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
+        let event: any;
         try {
-          const event = JSON.parse(trimmed);
-          await mcp.notification({
-            method: "notifications/claude/channel",
-            params: {
-              content: trimmed,
-              meta: {
-                event: event.event || "unknown",
-                task_id: event.task_id || "",
-                title: event.title || "",
-                project: event.project || "",
-                timestamp: event.timestamp || "",
-              },
-            },
-          });
+          event = JSON.parse(trimmed);
         } catch {
-          // Skip malformed lines
+          // Malformed line → treat as unassigned. The cursor still advances
+          // below (we iterate every line); only the emit is gated here.
+          if (SEE_UNASSIGNED) {
+            await mcp.notification({
+              method: "notifications/claude/channel",
+              params: { content: trimmed, meta: {} },
+            });
+          }
+          continue;
         }
+
+        // Per-GM scoping: emit if assigned to this GM, or if unassigned and
+        // this session opts into seeing unassigned events. A missing/blank
+        // assigned_gm is treated as unassigned.
+        const assignedGm = event.assigned_gm;
+        const isMine = assignedGm === GM_SLUG;
+        const isUnassigned =
+          assignedGm === undefined || assignedGm === null || assignedGm === "";
+        if (!isMine && !(isUnassigned && SEE_UNASSIGNED)) continue;
+
+        await mcp.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: trimmed,
+            meta: {
+              event: event.event || "unknown",
+              task_id: event.task_id || "",
+              title: event.title || "",
+              project: event.project || "",
+              assigned_gm: event.assigned_gm || "",
+              timestamp: event.timestamp || "",
+            },
+          },
+        });
       }
     }
 
