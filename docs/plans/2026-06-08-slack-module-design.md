@@ -1,6 +1,14 @@
 # Slack module — manage TaskYou from Slack
 
-> Status: design / recommendation (not yet implemented)
+> Status: **implemented** in this PR — see `modules/slack/` (`slack-bridge.mjs`,
+> `README.md`, tests), `templates/ty-slack.service.tmpl`, and the `SLACK_*`
+> wiring in `setup.sh` + `config.example.env`. This doc is the design rationale.
+>
+> One refinement landed during build: the bridge runs **on the agents server**
+> (next to `ty` + `notifications.jsonl`), so it reads the file and runs `ty`
+> **directly** — no `runRemote()`/SSH needed. It's a zero-dependency Node `.mjs`
+> (matching the Linear poller) rather than bun/TS, because the server has Node
+> (bun is a GM-machine prereq). Outbound + inbound both shipped.
 > Origin: TaskYou task #3723 — "Explore taskyou MCP sidecar extension for Slack"
 > TL;DR: Add a **`modules/slack/`** integration. Now that the channels work
 > (#28) and local/macOS support (#31) are **merged**, this is small: a Slack

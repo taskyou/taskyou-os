@@ -1,0 +1,17 @@
+[Unit]
+Description=TaskYou Slack bridge
+After=network.target ty-daemon.service
+Wants=ty-daemon.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/scripts/slack
+Environment="PATH=%h/bin:%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart={{NODE_BIN}} %h/scripts/slack/slack-bridge.mjs
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/log/ty-slack.log
+StandardError=append:%h/log/ty-slack.log
+
+[Install]
+WantedBy=default.target
