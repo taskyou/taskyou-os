@@ -81,6 +81,22 @@ if grep -q '{{' "$GM_DIR/channel/taskyou-channel.ts"; then fail "unresolved {{pl
 # LOCAL mode must be baked (SERVER_HOST=local)
 grep -q 'IS_LOCAL' "$GM_DIR/channel/taskyou-channel.ts" && pass "local-mode branch present (PR #31)" || fail "local-mode branch absent"
 
+# ── 1b. Local-mode surface (no "remote server" confusion) ────────────────────
+echo; echo "[1b] local-mode surface — wrappers + language + checklist"
+CH="$GM_DIR/channel/taskyou-channel.ts"
+grep -q 'this machine' "$CH" && pass "channel tool/instruction language is local-aware (\"this machine\")" || fail "channel still says \"remote server\" in local mode"
+grep -q 'ALLOWED_PROJECTS' "$CH" && pass "project allowlist baked into channel" || fail "no project filter in channel"
+grep -q 'commandArg' "$CH" && pass "ty_command/ssh_command arg parsing is robust (no 'ty undefined')" || fail "tool arg parsing not hardened"
+# bin wrappers must run locally, not 'ssh local'
+if grep -q 'ssh local' "$GM_DIR/bin/ty-remote"; then fail "bin/ty-remote still does 'ssh local'"; else pass "bin/ty-remote has no 'ssh local'"; fi
+"$GM_DIR/bin/ssh-remote" "echo WRAPPER_OK" 2>/dev/null | grep -q WRAPPER_OK && pass "bin/ssh-remote runs locally" || fail "bin/ssh-remote does not run locally"
+# CLAUDE.md local banner + no leftover remote-only sentence
+grep -q 'Local mode: agents run on THIS machine' "$GM_DIR/CLAUDE.md" && pass "CLAUDE.md has local-mode banner" || fail "CLAUDE.md missing local-mode banner"
+grep -q 'The agents live on a remote server' "$GM_DIR/CLAUDE.md" && fail "CLAUDE.md kept the remote-only sentence in local mode" || pass "CLAUDE.md dropped the remote-only sentence"
+# checklist: local steps, no 'claude login' on a server
+grep -q 'daemon is running on this machine' "$SANDBOX/local.log" && pass "checklist shows local daemon step" || fail "checklist not local-aware"
+grep -q 'claude login' "$SANDBOX/local.log" && fail "checklist still tells you to 'claude login' on a server" || pass "checklist drops server-login steps"
+
 # ── 2. Channel smoke test (PR #28's own test) ────────────────────────────────
 echo; echo "[2] channel smoke-test (handshake + capabilities + tools)"
 cp "$SRC/templates/channel/smoke-test.ts" "$GM_DIR/channel/smoke-test.ts"
