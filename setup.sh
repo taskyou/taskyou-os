@@ -256,6 +256,14 @@ export EXE_DEV_VM_NAME="${EXE_DEV_VM_NAME:-}"
 export NONO_ENABLED="${NONO_ENABLED:-false}"
 export NONO_CREDENTIALS="${NONO_CREDENTIALS:-}"
 export NONO_PROXY_HOSTS="${NONO_PROXY_HOSTS:-}"
+export SLACK_ENABLED="${SLACK_ENABLED:-false}"
+export SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
+export SLACK_APP_TOKEN="${SLACK_APP_TOKEN:-}"
+export SLACK_NOTIFY_CHANNEL="${SLACK_NOTIFY_CHANNEL:-}"
+export SLACK_ALLOWED_USERS="${SLACK_ALLOWED_USERS:-}"
+export SLACK_PROJECT_MAP="${SLACK_PROJECT_MAP:-}"
+export SLACK_ANTHROPIC_API_KEY="${SLACK_ANTHROPIC_API_KEY:-}"
+export SLACK_CLASSIFIER_MODEL="${SLACK_CLASSIFIER_MODEL:-claude-haiku-4-5-20251001}"
 
 # Generate nono proxy flags for wrapper scripts
 if [[ "$NONO_ENABLED" == "true" && -n "$NONO_PROXY_HOSTS" ]]; then
@@ -524,6 +532,67 @@ setup_nono() {
   log "nono credential isolation setup complete"
 }
 
+# ── Slack module ──────────────────────────────────────────────────────────────
+
+# Install the Slack bridge on a remote host as the ty-slack systemd user
+# service. Long-running (Socket Mode holds a WebSocket), so unlike the Linear
+# poller it's a service, not a cron job. $1 = ssh target, $2 = remote home.
+setup_slack_remote() {
+  local ssh_target="$1"
+  local remote_home="$2"
+
+  log "Setting up Slack integration"
+
+  local scripts_dir="$remote_home/scripts/slack"
+  ssh "$ssh_target" "mkdir -p $scripts_dir $remote_home/log $remote_home/.config/systemd/user"
+  scp -q "$MODULES_DIR/slack/slack-bridge.mjs" "$ssh_target:$scripts_dir/slack-bridge.mjs"
+  ssh "$ssh_target" "chmod +x $scripts_dir/slack-bridge.mjs"
+
+  # .env (chmod 600 — holds bot/app tokens). Written via stdin to keep tokens
+  # out of the process list.
+  local project_map_json="$SLACK_PROJECT_MAP"
+  [[ -z "$project_map_json" ]] && project_map_json="{}"
+  local default_project
+  default_project=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
+  ssh "$ssh_target" "cat > $scripts_dir/.env && chmod 600 $scripts_dir/.env" <<EOF
+SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
+SLACK_APP_TOKEN=$SLACK_APP_TOKEN
+SLACK_NOTIFY_CHANNEL=$SLACK_NOTIFY_CHANNEL
+SLACK_ALLOWED_USERS=$SLACK_ALLOWED_USERS
+SLACK_PROJECT_MAP=$project_map_json
+DEFAULT_PROJECT=$default_project
+TY_PATH=$remote_home/.local/bin/ty
+NOTIFICATIONS_FILE=$remote_home/notifications.jsonl
+ANTHROPIC_API_KEY=$SLACK_ANTHROPIC_API_KEY
+ANTHROPIC_MODEL=$SLACK_CLASSIFIER_MODEL
+EOF
+  ok "slack-bridge installed"
+
+  # Resolve node on the target (login shell picks up asdf/nvm shims) and bake
+  # the absolute path into the service so systemd's minimal PATH still finds it.
+  local node_bin
+  node_bin=$(ssh "$ssh_target" "bash -lc 'command -v node'" 2>/dev/null | tr -d '\r' | tail -1)
+  if [[ -z "$node_bin" ]]; then
+    warn "node not found on $ssh_target — install Node 22+ so the bridge can run"
+    node_bin="node"
+  fi
+  export NODE_BIN="$node_bin"
+
+  render_file "$TEMPLATES_DIR/ty-slack.service.tmpl" "/tmp/ty-slack.service"
+  scp -q "/tmp/ty-slack.service" "$ssh_target:$remote_home/.config/systemd/user/ty-slack.service"
+  rm -f "/tmp/ty-slack.service"
+
+  ssh "$ssh_target" "systemctl --user daemon-reload && systemctl --user enable ty-slack && systemctl --user restart ty-slack" 2>/dev/null \
+    || warn "could not enable ty-slack service (needs lingering — see ty-daemon setup)"
+  sleep 2
+  if ssh "$ssh_target" "systemctl --user is-active ty-slack" 2>/dev/null | grep -q "active"; then
+    ok "ty-slack running (systemd user service)"
+    ok "Logs: $remote_home/log/ty-slack.log"
+  else
+    warn "ty-slack may not have started. Debug: ssh $ssh_target 'systemctl --user status ty-slack'"
+  fi
+}
+
 # ── Daemon systemd service ────────────────────────────────────────────────────
 
 install_daemon_service() {
@@ -644,6 +713,36 @@ setup_server_local() {
   # Notifications file
   touch "$home_dir/notifications.jsonl"
   ok "notifications.jsonl"
+
+  # Slack module (local mode: render files + .env; no systemd on macOS, so the
+  # operator starts it — directly or via a launchd agent).
+  if [[ "$SLACK_ENABLED" == "true" ]]; then
+    log "Setting up Slack integration (local)"
+    local slack_dir="$home_dir/scripts/slack"
+    mkdir -p "$slack_dir"
+    cp "$MODULES_DIR/slack/slack-bridge.mjs" "$slack_dir/slack-bridge.mjs"
+    chmod +x "$slack_dir/slack-bridge.mjs"
+
+    local project_map_json="$SLACK_PROJECT_MAP"
+  [[ -z "$project_map_json" ]] && project_map_json="{}"
+    local default_project
+    default_project=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
+    cat > "$slack_dir/.env" <<EOF
+SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
+SLACK_APP_TOKEN=$SLACK_APP_TOKEN
+SLACK_NOTIFY_CHANNEL=$SLACK_NOTIFY_CHANNEL
+SLACK_ALLOWED_USERS=$SLACK_ALLOWED_USERS
+SLACK_PROJECT_MAP=$project_map_json
+DEFAULT_PROJECT=$default_project
+TY_PATH=$(command -v ty)
+NOTIFICATIONS_FILE=$home_dir/notifications.jsonl
+ANTHROPIC_API_KEY=$SLACK_ANTHROPIC_API_KEY
+ANTHROPIC_MODEL=$SLACK_CLASSIFIER_MODEL
+EOF
+    chmod 600 "$slack_dir/.env"
+    ok "slack-bridge installed: $slack_dir"
+    warn "Local mode: start it with 'node $slack_dir/slack-bridge.mjs' (or a launchd agent)."
+  fi
 
   log "Local server setup complete (daemon assumed running on this machine)"
 }
@@ -821,6 +920,11 @@ EOF
       remote "(crontab -l 2>/dev/null; echo '$cron_line') | crontab -"
       ok "Cron job installed (every 2 minutes)"
     fi
+  fi
+
+  # Slack module
+  if [[ "$SLACK_ENABLED" == "true" ]]; then
+    setup_slack_remote "$SERVER_HOST" "$SERVER_HOME"
   fi
 
   # Security audit script
@@ -1144,6 +1248,11 @@ EOF
       exe_remote "(crontab -l 2>/dev/null; echo '$cron_line_linear') | crontab -"
       ok "Linear cron job installed"
     fi
+  fi
+
+  # Slack module
+  if [[ "$SLACK_ENABLED" == "true" ]]; then
+    setup_slack_remote "$EXE_HOST" "$EXE_HOME"
   fi
 
   # Security audit script
