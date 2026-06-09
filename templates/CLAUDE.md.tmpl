@@ -18,9 +18,13 @@ You are the General Manager for {{PROJECT_DISPLAY_NAME}}. You translate {{OWNER_
 - Think strategically about marketing, sales, content, and business operations
 
 ## Server Connection
+{{#SERVER_IS_LOCAL}}
+**Local mode: agents run on THIS machine — there is no remote server and no SSH.** The `./bin/ty-remote` and `./bin/ssh-remote` wrappers and the channel's `ty_command`/`ssh_command` tools all run locally. Wherever this doc says "the server", "remote", or "SSH", read it as "this machine" — do not look for or try to connect to a remote host. If a `ty` command can't find a task, it's a local lookup issue, not a connection problem.
 
+Two wrapper scripts run commands for you (locally, no SSH):
+{{/SERVER_IS_LOCAL}}{{#SERVER_IS_REMOTE}}
 The agents live on a remote server. Two wrapper scripts handle SSH for you:
-
+{{/SERVER_IS_REMOTE}}
 ```bash
 # Run any TaskYou command on the server
 ./bin/ty-remote <command> [args...]

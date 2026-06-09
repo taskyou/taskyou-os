@@ -67,7 +67,11 @@ const proc = spawn("bun", ["run", CHANNEL_TS], {
 
 let pushed: any = null;
 let sawSeedReplay = false;
+let sawForeign = false; // an event from a project this GM doesn't own — must be filtered
+let toolEcho = "";      // ssh_command({command}) result — proves the tool runs locally
+let toolEchoAlt = "";   // ssh_command({args}) result — proves robust arg parsing (no "ty undefined")
 let buf = "";
+const FOREIGN_ID = "qa-foreign";
 
 proc.stdout.on("data", (d: Buffer) => {
   buf += d.toString();
@@ -84,8 +88,12 @@ proc.stdout.on("data", (d: Buffer) => {
     if (msg.method === "notifications/claude/channel") {
       const meta = msg.params?.meta || {};
       if (meta.task_id === "qa-seed") sawSeedReplay = true;
+      if (meta.task_id === FOREIGN_ID) sawForeign = true;
       if (meta.task_id === TASK_ID) pushed = msg;
     }
+    // tool-call responses (id 3 = correct param, id 4 = wrong param name)
+    if (msg.id === 3) toolEcho = msg.result?.content?.[0]?.text || "";
+    if (msg.id === 4) toolEchoAlt = msg.result?.content?.[0]?.text || "";
   }
 });
 
@@ -117,10 +125,33 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     }) + "\n"
   );
 
+  // 3b. Exercise the tools through MCP. Both must run locally (no SSH) and
+  //     return output. id=4 deliberately uses the WRONG param name (`args` on
+  //     ssh_command) to prove the robust parsing doesn't send `undefined`.
+  proc.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "ssh_command", arguments: { command: "echo TOOLOK" } },
+    }) + "\n"
+  );
+  proc.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "ssh_command", arguments: { args: "echo VIAARGS" } },
+    }) + "\n"
+  );
+
   // 4. Let the startup poll record its position (lastLineCount = 1 from the seed).
   await sleep(2500);
 
-  // 5. Fire the REAL rendered hook — appends a new line to notifications.jsonl.
+  // 5a. Fire a FOREIGN-project event first — the channel (rendered with
+  //     PROJECTS=qa-test) must filter it out and never push it.
+  spawnSync("bash", [HOOK_SCRIPT], {
+    env: { ...process.env, TASK_ID: FOREIGN_ID, TASK_TITLE: "other GM's task", TASK_PROJECT: "some-other-gm" },
+    encoding: "utf8",
+  });
+
+  // 5b. Fire the REAL rendered hook for THIS GM's project — appends to notifications.jsonl.
   const r = spawnSync("bash", [HOOK_SCRIPT], {
     env: {
       ...process.env,
@@ -144,6 +175,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
         : `no channel push for task ${TASK_ID} within ${POLL_WAIT_MS}ms`
     );
 
+  if (sawForeign)
+    fail("channel pushed a foreign-project event — project filter not working");
+  if (!toolEcho.includes("TOOLOK"))
+    fail(`ssh_command({command}) did not run locally — got: ${JSON.stringify(toolEcho)}`);
+  if (!toolEchoAlt.includes("VIAARGS"))
+    fail(`ssh_command({args}) (wrong param) not handled robustly — got: ${JSON.stringify(toolEchoAlt)}`);
+
   const content = pushed.params?.content || "";
   if (!content.includes(TASK_ID)) fail("pushed event content missing task id");
   if (!content.includes("end to end")) fail("pushed event lost the hook title (JSON escaping?)");
@@ -151,6 +189,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   console.log(`✓ [${MODE}] channel pushed completed event for ${TASK_ID}`);
   if (MODE === "steady") console.log(`✓ did not replay pre-existing notifications on startup`);
   if (MODE === "cold") console.log(`✓ first event after empty-file start was delivered (cold-start fix)`);
+  console.log(`✓ foreign-project event was filtered out (not pushed)`);
+  console.log(`✓ ssh_command ran locally; robust to wrong param name (no "undefined")`);
   console.log(`✓ title with embedded quotes survived hook→channel`);
   console.log("\nPASSED");
   proc.kill();

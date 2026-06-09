@@ -229,6 +229,13 @@ done
 PROJECT_NAME_UPPER=$(echo "$PROJECT_NAME" | tr '[:lower:]' '[:upper:]')
 export PROJECT_NAME PROJECT_DISPLAY_NAME GM_ALIAS GIT_NAME GIT_EMAIL PROJECTS
 export SERVER_HOST="${SERVER_HOST:-}" SERVER_USER="${SERVER_USER:-}" SERVER_HOME="${SERVER_HOME:-}"
+# Local-vs-remote flags for template conditionals ({{#SERVER_IS_LOCAL}} …).
+# Inlined (not the is_local_server function, which is defined later in the file).
+if [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_HOST" ]]; then
+  export SERVER_IS_LOCAL="true" SERVER_IS_REMOTE="false"
+else
+  export SERVER_IS_LOCAL="false" SERVER_IS_REMOTE="true"
+fi
 export LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-}" CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-}"
 export PROJECT_NAME_UPPER
 export PROJECT_DESCRIPTION="${PROJECT_DESCRIPTION:-}"
@@ -1170,26 +1177,47 @@ print_checklist() {
   echo "════════════════════════════════════════════════════════════"
   echo ""
   echo " 1. Add the shell alias to ~/.zshrc:"
-  echo "    alias ${GM_ALIAS}='cd ${LOCAL_PROJECT_DIR} && CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} claude'"
-  echo ""
-  echo " 2. Log into Claude on the server:"
-  echo "    ssh $SERVER_HOST"
-  echo "    claude login"
-  echo ""
-  echo " 3. Authenticate GitHub on the server:"
-  echo "    ssh $SERVER_HOST"
-  echo "    gh auth login"
+  echo "    alias ${GM_ALIAS}='cd ${LOCAL_PROJECT_DIR} && CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} claude --dangerously-load-development-channels server:taskyou'"
   echo ""
 
-  if [[ -n "${GITHUB_REPOS:-}" ]]; then
-    echo " 4. Add GitHub remotes to project repos:"
-    IFS=',' read -ra mappings <<< "$GITHUB_REPOS"
-    for mapping in "${mappings[@]}"; do
-      local proj="${mapping%%:*}"
-      local repo="${mapping#*:}"
-      echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git'"
-    done
+  if is_local_server; then
+    # Local mode: GM + daemon share this machine — no SSH, no server login.
+    echo " 2. Make sure the TaskYou daemon is running on this machine:"
+    echo "    ty daemon status      # start it with: ty daemon"
     echo ""
+    echo " 3. You're already logged into Claude + GitHub here — nothing to do on a server."
+    echo ""
+
+    if [[ -n "${GITHUB_REPOS:-}" ]]; then
+      echo " 4. Add GitHub remotes to project repos:"
+      IFS=',' read -ra mappings <<< "$GITHUB_REPOS"
+      for mapping in "${mappings[@]}"; do
+        local proj="${mapping%%:*}"
+        local repo="${mapping#*:}"
+        echo "    (cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git)"
+      done
+      echo ""
+    fi
+  else
+    echo " 2. Log into Claude on the server:"
+    echo "    ssh $SERVER_HOST"
+    echo "    claude login"
+    echo ""
+    echo " 3. Authenticate GitHub on the server:"
+    echo "    ssh $SERVER_HOST"
+    echo "    gh auth login"
+    echo ""
+
+    if [[ -n "${GITHUB_REPOS:-}" ]]; then
+      echo " 4. Add GitHub remotes to project repos:"
+      IFS=',' read -ra mappings <<< "$GITHUB_REPOS"
+      for mapping in "${mappings[@]}"; do
+        local proj="${mapping%%:*}"
+        local repo="${mapping#*:}"
+        echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git'"
+      done
+      echo ""
+    fi
   fi
 
   echo " 5. Start the GM:"

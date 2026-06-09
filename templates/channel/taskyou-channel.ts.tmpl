@@ -14,6 +14,25 @@ const SERVER_HOST = "{{SERVER_HOST}}";
 const SERVER_HOME = "{{SERVER_HOME}}";
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
 
+// When the GM runs on the same machine as the TaskYou daemon, SERVER_HOST is
+// "local"/"localhost"/"" — commands run directly via a login shell, no SSH.
+const IS_LOCAL =
+  SERVER_HOST === "local" ||
+  SERVER_HOST === "localhost" ||
+  SERVER_HOST === "";
+
+// How we describe where commands run, so the GM's mental model matches reality.
+// In local mode there is NO remote server — saying "remote server" makes the GM
+// chase a connection that doesn't exist.
+const LOCATION = IS_LOCAL ? "this machine" : "the remote server";
+
+// Only surface events for this GM's own projects. Rendered from config's
+// PROJECTS (comma-separated). Empty list = no filter (surface everything).
+const ALLOWED_PROJECTS = "{{PROJECTS}}"
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 // Track where we are in the notifications file
 let lastLineCount = 0;
 // Set once the startup poll has recorded its position. Until then we don't
@@ -34,16 +53,19 @@ const mcp = new Server(
       tools: {},
     },
     instructions: [
-      'Task events from remote agents arrive as <channel source="taskyou" event="..." task_id="..." ...>.',
+      `Task events from agents on ${LOCATION} arrive as <channel source="taskyou" event="..." task_id="..." ...>.`,
+      IS_LOCAL
+        ? "Agents run on THIS machine (no SSH). Run ty directly — do not look for a remote server."
+        : "Agents run on the remote server, reached over SSH.",
       "Events:",
       '  - event="completed": An agent finished its task. Offer to show output (ty output <id>). Mark your todo done.',
       '  - event="blocked": An agent is stuck. Check output, suggest retry or escalate.',
       "When you see a task event, update your todos and briefly inform the user.",
       "If the user is mid-thought, hold the update until a natural pause.",
       "",
-      "You can also use the channel tools to run TaskYou commands without shelling out:",
-      "  - ty_command: Run any ty command on the server (e.g. list, board, create, execute, retry, output, close)",
-      "  - ssh_command: Run any shell command on the server",
+      `You can also use the channel tools to run TaskYou commands on ${LOCATION} without shelling out:`,
+      "  - ty_command: Run any ty command (e.g. list, board, create, execute, retry, output, close)",
+      "  - ssh_command: Run any shell command",
     ].join("\n"),
   }
 );
@@ -54,8 +76,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "ty_command",
-      description:
-        "Run a TaskYou command on the remote server (e.g. list, board, create, execute, retry, output, close)",
+      description: `Run a TaskYou command on ${LOCATION} (e.g. list, board, create, execute, retry, output, close)`,
       inputSchema: {
         type: "object",
         properties: {
@@ -70,14 +91,13 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ssh_command",
-      description:
-        "Run a shell command on the remote server (e.g. git log, tail logs)",
+      description: `Run a shell command on ${LOCATION} (e.g. git log, tail logs)`,
       inputSchema: {
         type: "object",
         properties: {
           command: {
             type: "string",
-            description: "The shell command to run on the server",
+            description: `The shell command to run on ${LOCATION}`,
           },
         },
         required: ["command"],
@@ -86,17 +106,38 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+// Pull the command string out of a tool call, tolerant of the GM mixing up the
+// two parameter names (`args` vs `command`) — otherwise a wrong key silently
+// becomes `undefined` and we'd run literally `ty undefined`.
+function commandArg(args: unknown): string {
+  const a = (args ?? {}) as Record<string, unknown>;
+  const val = a.args ?? a.command;
+  return typeof val === "string" ? val.trim() : "";
+}
+
 mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
 
   if (name === "ty_command") {
-    const { args: tyArgs } = args as { args: string };
+    const tyArgs = commandArg(args);
+    if (!tyArgs) {
+      return {
+        content: [{ type: "text", text: 'ty_command needs an "args" string, e.g. {"args":"output 42"}.' }],
+        isError: true,
+      };
+    }
     const result = await runRemote(`ty ${tyArgs}`);
     return { content: [{ type: "text", text: result }] };
   }
 
   if (name === "ssh_command") {
-    const { command } = args as { command: string };
+    const command = commandArg(args);
+    if (!command) {
+      return {
+        content: [{ type: "text", text: 'ssh_command needs a "command" string, e.g. {"command":"git log -1"}.' }],
+        isError: true,
+      };
+    }
     const result = await runRemote(command);
     return { content: [{ type: "text", text: result }] };
   }
@@ -105,14 +146,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 });
 
 // ── Command runner (local or SSH) ────────────────────────────────────────────
-
-// When the GM runs on the same machine as the TaskYou daemon, SERVER_HOST is
-// "local"/"localhost"/"" — run commands directly via a login shell instead of
-// over SSH. Otherwise keep the original remote-Linux SSH behavior unchanged.
-const IS_LOCAL =
-  SERVER_HOST === "local" ||
-  SERVER_HOST === "localhost" ||
-  SERVER_HOST === "";
 
 function runRemote(command: string): Promise<string> {
   return new Promise((resolve) => {
@@ -185,6 +218,16 @@ async function pollNotifications() {
 
         try {
           const event = JSON.parse(trimmed);
+
+          // Project filter: skip events from projects this GM doesn't own.
+          // (notifications.jsonl is shared by every project on the daemon, so
+          // without this a local GM would surface unrelated GMs' task events.)
+          // Events with no project are always passed — can't safely filter them.
+          const proj = event.project || "";
+          if (ALLOWED_PROJECTS.length && proj && !ALLOWED_PROJECTS.includes(proj)) {
+            continue;
+          }
+
           await mcp.notification({
             method: "notifications/claude/channel",
             params: {
@@ -193,7 +236,7 @@ async function pollNotifications() {
                 event: event.event || "unknown",
                 task_id: event.task_id || "",
                 title: event.title || "",
-                project: event.project || "",
+                project: proj,
                 timestamp: event.timestamp || "",
               },
             },
