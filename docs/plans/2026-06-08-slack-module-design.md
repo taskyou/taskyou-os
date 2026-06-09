@@ -2,11 +2,13 @@
 
 > Status: design / recommendation (not yet implemented)
 > Origin: TaskYou task #3723 — "Explore taskyou MCP sidecar extension for Slack"
-> TL;DR: Add a **`modules/slack/`** integration that mirrors `modules/linear/` —
-> watch a Slack channel/DM/@mention, classify intent, drive `ty`, post replies,
-> and push `task.blocked`/`task.completed` notifications back. We've already
-> built this exact pattern twice (the Linear poller here, and `ty-email` in the
-> workflow repo), so this is mostly copy-adapt-configure.
+> TL;DR: Add a **`modules/slack/`** integration. Now that the channels work
+> (#28) and local/macOS support (#31) are **merged**, this is small: a Slack
+> module is the merged `templates/channel/taskyou-channel.ts` with its two ends
+> re-pointed — poll `notifications.jsonl` → `chat.postMessage` (out), and Slack
+> message → classify → `runRemote("ty …")` (in). Net-new code = a Slack adapter
+> + an LLM classifier. Ship outbound notifications first (a hook → Slack
+> webhook), inbound control second. See §7.
 
 ---
 
@@ -110,13 +112,11 @@ modules/slack/
 # === Optional: Slack integration ===
 # Set SLACK_ENABLED=true to manage TaskYou from Slack
 # SLACK_ENABLED="true"
-# SLACK_MODE="socket"                 # socket (no public URL) | events (needs HTTPS)
 # SLACK_BOT_TOKEN="xoxb-..."          # chat:write, app_mentions:read, im:history
-# SLACK_APP_TOKEN="xapp-..."          # socket mode
-# SLACK_SIGNING_SECRET="..."          # events mode
+# SLACK_APP_TOKEN="xapp-..."          # Socket Mode (recommended — no public URL)
 # SLACK_NOTIFY_CHANNEL="#taskyou"     # where blocked/completed pings go
 # SLACK_ALLOWED_USERS="U012ABC,U034DEF"   # only these Slack user IDs may drive ty
-# SLACK_PROJECT_MAP='{"#eng":"workflow","#content":"content"}'  # channel → project
+# SLACK_PROJECT_MAP='{"#eng":"workflow","#content":"content"}'  # Slack channel → ty project
 ```
 
 ### Interaction examples
@@ -143,69 +143,65 @@ modules/slack/
 
 ## 7. Recommendation
 
-1. **Build Pattern A as `modules/slack/`**, modeled on the in-flight **channel**
-   (`templates/channel/taskyou-channel.ts`, see §8) rather than the older
-   `linear-poll.mjs`, enabled via `SLACK_ENABLED=true`. Reuse the channel's
-   `notifications.jsonl` poll loop + `runRemote()` + `assigned_gm` filtering;
-   add a Slack adapter (in/out) and the LLM classifier.
+The channels work (#28) and local/macOS support (#31) are now **merged to
+`main`**, so this is no longer speculative — `templates/channel/taskyou-channel.ts`
+is real code to copy, and a Slack module is **that channel with its two ends
+re-pointed at Slack.**
+
+1. **Build `modules/slack/slack-bridge.ts`** (bun/TS) by lifting two functions
+   straight from the merged channel: `pollNotifications()` (cursor via
+   `lastLineCount` + `tail -n +N` over `notifications.jsonl`) and `runRemote()`
+   (the `IS_LOCAL` `bash -lc` vs SSH branch from #31). Then:
+   - **Outbound:** in `pollNotifications`, replace "emit into the GM session"
+     (`mcp.notification`) with `chat.postMessage` to Slack.
+   - **Inbound:** Slack message → LLM classify intent → `runRemote("ty …")`
+     (the same call `ty_command` already makes).
+   The only genuinely new code is the **Slack adapter** (Socket Mode in/out) and
+   the **LLM classifier** (lift from `ty-email/internal/classifier`).
 2. **Defer Pattern B** (network-exposed MCP for cloud Claude-in-Slack) to a
    separate spike built on the credential-proxy design + workflow PR #402.
-3. The **"ping me in Slack"** half can ship immediately: extend the
-   `task.blocked`/`task.completed` hook templates (or a tiny tail of
-   `notifications.jsonl`) to POST to a Slack incoming webhook — independent of the
-   full bridge.
 
-## 8. Interaction with the in-flight channels work (#28 / #31 / #32)
+### Ship it in two phases
 
-A "channels" refactor is open and **reshapes the substrate this design assumes —
-mostly in our favor.** Build the Slack module *after* these land; they shrink the
-work and answer the routing question below.
+- **Phase 1 — outbound only (hours).** Extend the merged `task.blocked` /
+  `task.completed` hook templates to `curl` a Slack incoming webhook. Delivers
+  "ping me in Slack when a task blocks/finishes" with no new daemon.
+- **Phase 2 — inbound control.** Add the Socket Mode bot + classifier so you can
+  create / unblock / query tasks from Slack. Two-way bridge.
 
-- **#28 — Claude Code channel for push events** (`mergeable: false`, needs rebase).
-  Adds `templates/channel/taskyou-channel.ts` — a bun/TS MCP server that polls
-  `notifications.jsonl` (`pollNotifications()`, cursor via `lastLineCount` +
-  `tail -n +N`), exposes `ty_command` / `ssh_command` via `runRemote()`, and
-  pushes events into the GM session. It **replaces** the old "background agent
-  `tail -f`" approach.
-  - *Effect:* `notifications.jsonl` stays the source of truth, so our push
-    mechanism holds. But the **template to copy is now `taskyou-channel.ts`, not
-    `linear-poll.mjs`** — a Slack module is that poll loop + `runRemote()`, minus
-    "emit into the GM session," plus a Slack adapter. Prefer **TS/bun** to share
-    code (bun is already a prereq).
-  - *Terminology:* after #28, "channel" = *push into a Claude Code session*. Slack
-    is a **chat surface for a human** — a different layer. Slack stays a **module**
-    (a sibling consumer of `notifications.jsonl`), **not** a Claude Code channel —
+## 8. What the merged channel work (#28, #31) settles
+
+Both are merged to `main`; the substrate is fixed code now, not a moving branch.
+
+- **#28 — Claude Code channel for push events** (merged). `templates/channel/
+  taskyou-channel.ts` polls `notifications.jsonl` (`pollNotifications()`,
+  `lastLineCount` + `tail -n +N`) and exposes `ty_command` / `ssh_command` via
+  `runRemote()`, replacing the old "background agent `tail -f`" approach.
+  - *For Slack:* `notifications.jsonl` is the settled source of truth, and the
+    **template to copy is `taskyou-channel.ts`** — reuse `pollNotifications()` +
+    `runRemote()` verbatim. There's also a `smoke-test.ts` to model tests on.
+  - *Terminology:* "channel" = *push into a Claude Code GM session*. Slack is a
+    **chat surface for a human** — a different layer. Slack stays a **module**
+    (a sibling consumer of `notifications.jsonl`), **not** a Claude Code channel,
     so it runs as its own daemon and **sidesteps #28's research-preview
     constraints** (`--dangerously-load-development-channels`, CC v2.1.80+,
     claude.ai-login-only).
-- **#32 — per-GM scoping (`assigned_gm`)** (stacked on #28, clean). Adds
-  `assigned_gm` end to end (`ty create --assigned-gm`, `TASK_ASSIGNED_GM` on
-  hooks, `assigned_gm` in each notification line, `GM_SLUG` / `SEE_UNASSIGNED`
-  filtering), riding on workflow PR #561.
-  - *Effect:* **this answers "shared bot vs per-user" below.** A single shared
-    Slack bot maps Slack user/channel → GM slug, stamps `ty create --assigned-gm`,
-    and filters notifications by `assigned_gm` to route the right ping to the right
-    person. Multi-user routing is no longer net-new — reuse the field.
-- **#31 — local mode + macOS** (stacked on #28, clean). Adds the `IS_LOCAL`
-  (`bash -lc`) vs SSH branch to `runRemote()`, an OS-aware hooks dir
+- **#31 — local mode + macOS** (merged). `runRemote()` now has the `IS_LOCAL`
+  (`bash -lc`) vs SSH branch, hooks install to the OS-correct dir
   (`~/Library/Application Support/task/hooks` on macOS), and `setup_server_local()`
-  that creates `notifications.jsonl`.
-  - *Effect:* replaces our vague "ty CLI vs `ty serve` API" with the project's
-    actual local/SSH pattern; rely on setup having created `notifications.jsonl`
-    and use the OS-correct hooks dir instead of hardcoding paths.
+  creates `notifications.jsonl`.
+  - *For Slack:* reuse `runRemote()` as-is — the bridge runs identically whether
+    the daemon is on the same Mac or a remote Linux box. Rely on setup having
+    created `notifications.jsonl`; don't hardcode paths.
 
-**Merge order:** #28 → #31 / #32 → this Slack module.
+*(Per-GM scoping / `assigned_gm` is out of scope: a single bot for a single
+operator, like `ty-email`. Routing by GM is not needed here.)*
 
 ## 9. Open questions for Bruno
 
-- ~~**Shared bot vs per-user**~~ — largely answered by #32: a single shared bot
-  can fan out correctly using `assigned_gm`. Remaining choice is just the
-  user→GM-slug mapping (per Slack user? per channel?).
-- **Socket Mode vs Events API:** Socket Mode needs no public URL (simplest on the
-  exe.dev VM / agent server); Events API suits an always-on shared bot but needs
-  an HTTPS endpoint.
-- **TS/bun vs `.mjs`:** lean TS/bun to share `pollNotifications` + `runRemote`
-  with the channel (§8). Confirm before implementation.
+- **Socket Mode vs Events API:** recommend **Socket Mode** — no public URL, works
+  identically on the exe.dev VM or a local Mac (#31). Events API only if we later
+  want an always-on shared bot with an HTTPS endpoint.
 - **Also pursue Pattern B?** Do we want the *existing* cloud Claude-in-Slack to
   call `taskyou_*` tools directly (remote MCP), or is a dedicated TaskYou bot
-  enough?
+  enough? (I'd say bot first, Pattern B later.)
