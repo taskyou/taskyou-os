@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ty-remote — Run TaskYou commands on your server
+# ty-remote — Run TaskYou commands on your server (or this machine in local mode)
 # Usage: ./bin/ty-remote <command> [args...]
 #   e.g., ./bin/ty-remote list
 #         ./bin/ty-remote create "My task" --project myproject
@@ -12,4 +12,13 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
-ssh {{SERVER_HOST}} "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"{{SERVER_HOME}}/.local/bin:{{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:\$PATH\" && cd {{SERVER_HOME}} && ty $*"
+SERVER_HOST="{{SERVER_HOST}}"
+SERVER_HOME="{{SERVER_HOME}}"
+
+if [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_HOST" ]]; then
+  # Local mode: the daemon runs on this machine — run ty directly, no SSH.
+  export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+  cd "$SERVER_HOME" && exec ty "$@"
+else
+  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && cd $SERVER_HOME && ty $*"
+fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ssh-remote — Run commands on your server
+# ssh-remote — Run commands on your server (or this machine in local mode)
 # Usage: ./bin/ssh-remote <command>
 #   e.g., ./bin/ssh-remote "pm2 status"
 #         ./bin/ssh-remote "tail -20 /tmp/ty-daemon.log"
@@ -12,4 +12,13 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
-ssh {{SERVER_HOST}} "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"{{SERVER_HOME}}/.local/bin:{{SERVER_HOME}}/bin:{{SERVER_HOME}}/.npm-global/bin:\$PATH\" && $*"
+SERVER_HOST="{{SERVER_HOST}}"
+SERVER_HOME="{{SERVER_HOME}}"
+
+if [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_HOST" ]]; then
+  # Local mode: run on this machine via a login shell, no SSH.
+  export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+  exec bash -lc "$*"
+else
+  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && $*"
+fi
