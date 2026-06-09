@@ -254,9 +254,6 @@ export R2_PUBLIC_URL="${R2_PUBLIC_URL:-}"
 export GITHUB_REPOS="${GITHUB_REPOS:-}"
 export EXE_DEV_ENABLED="${EXE_DEV_ENABLED:-false}"
 export EXE_DEV_VM_NAME="${EXE_DEV_VM_NAME:-}"
-export NONO_ENABLED="${NONO_ENABLED:-false}"
-export NONO_CREDENTIALS="${NONO_CREDENTIALS:-}"
-export NONO_PROXY_HOSTS="${NONO_PROXY_HOSTS:-}"
 export SLACK_ENABLED="${SLACK_ENABLED:-false}"
 export SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
 export SLACK_APP_TOKEN="${SLACK_APP_TOKEN:-}"
@@ -265,24 +262,6 @@ export SLACK_ALLOWED_USERS="${SLACK_ALLOWED_USERS:-}"
 export SLACK_PROJECT_MAP="${SLACK_PROJECT_MAP:-}"
 export SLACK_ANTHROPIC_API_KEY="${SLACK_ANTHROPIC_API_KEY:-}"
 export SLACK_CLASSIFIER_MODEL="${SLACK_CLASSIFIER_MODEL:-claude-haiku-4-5-20251001}"
-
-# Generate nono proxy flags for wrapper scripts
-if [[ "$NONO_ENABLED" == "true" && -n "$NONO_PROXY_HOSTS" ]]; then
-  NONO_PROXY_FLAGS=""
-  IFS=',' read -ra hosts <<< "$NONO_PROXY_HOSTS"
-  for host in "${hosts[@]}"; do
-    host=$(echo "$host" | xargs)
-    NONO_PROXY_FLAGS+="--proxy-allow $host "
-  done
-  IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
-  for cred in "${creds[@]}"; do
-    name=$(echo "$cred" | cut -d: -f1 | xargs)
-    NONO_PROXY_FLAGS+="--proxy-credential $name "
-  done
-  export NONO_PROXY_FLAGS
-else
-  export NONO_PROXY_FLAGS=""
-fi
 
 # Generate dynamic table content
 export PROJECTS_TABLE
@@ -380,141 +359,16 @@ setup_local() {
 
 }
 
-# ── nono credential isolation ────────────────────────────────────────────────
+# ── PATH setup ───────────────────────────────────────────────────────────────
 
-setup_nono() {
+# Ensure ~/bin and ~/.local/bin are in PATH for ty and other user tools.
+# tmux/daemon sessions may not source the full login profile.
+setup_path() {
   local ssh_target="$1"
   local remote_home="$2"
 
-  log "Setting up nono credential isolation"
-
-  # Install nono via .deb package (Ubuntu/Debian)
-  if ssh "$ssh_target" "command -v nono" >/dev/null 2>&1; then
-    ok "nono already installed"
-  else
-    log "Installing nono"
-    # Get latest version, download .deb, install
-    # The .deb filename varies between releases (with/without -1 suffix), so try both
-    ssh "$ssh_target" 'set -e
-      VERSION=$(curl -sI https://github.com/always-further/nono/releases/latest | grep -i location | grep -oP "v\K[0-9.]+")
-      echo "Installing nono v${VERSION}"
-      wget -q "https://github.com/always-further/nono/releases/download/v${VERSION}/nono-cli_${VERSION}-1_amd64.deb" -O /tmp/nono.deb 2>/dev/null \
-        || wget -q "https://github.com/always-further/nono/releases/download/v${VERSION}/nono-cli_${VERSION}_amd64.deb" -O /tmp/nono.deb
-      sudo dpkg -i /tmp/nono.deb
-      rm -f /tmp/nono.deb' || {
-      warn "nono install failed. Install manually: https://nono.sh/docs/cli/getting_started/installation"
-      warn "Skipping credential isolation setup."
-      return 1
-    }
-    ok "nono installed"
-  fi
-
-  # Detect whether Secret Service (D-Bus) is available
-  # On headless servers (e.g. exe.dev VMs), secret-tool won't work
-  local has_secret_service=false
-  if ssh "$ssh_target" 'command -v secret-tool >/dev/null 2>&1 && secret-tool store --label="nono-test" service nono-test username test <<< "test" 2>/dev/null && secret-tool lookup service nono-test username test >/dev/null 2>&1' 2>/dev/null; then
-    has_secret_service=true
-    # Clean up test entry
-    ssh "$ssh_target" 'secret-tool clear service nono-test username test' 2>/dev/null || true
-    ok "Secret Service available"
-  else
-    warn "Secret Service not available (headless) — using secrets.env fallback"
-  fi
-
-  # Store credentials
-  if [[ -n "$NONO_CREDENTIALS" ]]; then
-    if $has_secret_service; then
-      log "Storing credentials in Secret Service"
-      IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
-      for entry in "${creds[@]}"; do
-        local name env_var value
-        name=$(echo "$entry" | cut -d: -f1 | xargs)
-        env_var=$(echo "$entry" | cut -d: -f2 | xargs)
-        value="${!env_var:-}"
-
-        if [[ -z "$value" ]]; then
-          warn "Skipping $name: $env_var is empty in config.env"
-          continue
-        fi
-
-        # Pipe value via stdin to avoid credentials in process list
-        printf '%s' "$value" | ssh "$ssh_target" "secret-tool store --label='nono: $name' service nono username $name 2>/dev/null" || {
-          warn "Failed to store $name — secret-tool may need a D-Bus session"
-          continue
-        }
-        ok "credential: $name (from $env_var)"
-      done
-    else
-      log "Storing credentials in secrets.env (headless fallback)"
-      local secrets_content=""
-      IFS=',' read -ra creds <<< "$NONO_CREDENTIALS"
-      for entry in "${creds[@]}"; do
-        local name env_var value
-        name=$(echo "$entry" | cut -d: -f1 | xargs)
-        env_var=$(echo "$entry" | cut -d: -f2 | xargs)
-        value="${!env_var:-}"
-
-        if [[ -z "$value" ]]; then
-          warn "Skipping $name: $env_var is empty in config.env"
-          continue
-        fi
-
-        secrets_content+="${name}=${value}"$'\n'
-        ok "credential: $name (from $env_var)"
-      done
-
-      # Write via stdin to avoid credentials in process list
-      printf '%s' "$secrets_content" | ssh "$ssh_target" "mkdir -p $remote_home/.config/nono && cat > $remote_home/.config/nono/secrets.env && chmod 600 $remote_home/.config/nono/secrets.env"
-      ok "secrets.env written (chmod 600)"
-    fi
-  fi
-
-  # Git credential helper for sandboxed executors
-  log "Configuring git credential helper"
-  if ssh "$ssh_target" "test -x /usr/bin/gh" 2>/dev/null; then
-    ssh "$ssh_target" "git config --global credential.helper '!/usr/bin/gh auth git-credential'"
-    ok "git credential helper: gh (full path for sandbox)"
-  else
-    ssh "$ssh_target" "git config --global credential.helper store"
-    ok "git credential helper: store (gh not installed)"
-  fi
-
-  # Deploy nono profile (JSON format required by nono)
-  log "Deploying nono profile"
-  ssh "$ssh_target" "mkdir -p $remote_home/.config/nono/profiles"
-  render_file "$TEMPLATES_DIR/nono-profile.json.tmpl" "/tmp/taskyou-nono-profile.json"
-  scp -q "/tmp/taskyou-nono-profile.json" "$ssh_target:$remote_home/.config/nono/profiles/taskyou-agent.json"
-  rm -f "/tmp/taskyou-nono-profile.json"
-  ok "profile: taskyou-agent"
-
-  # Deploy nono-exec (shared sandbox launcher)
-  log "Deploying nono-exec"
-  ssh "$ssh_target" "mkdir -p $remote_home/.local/bin"
-  render_file "$TEMPLATES_DIR/nono-exec.sh.tmpl" "/tmp/nono-exec.sh"
-  scp -q "/tmp/nono-exec.sh" "$ssh_target:$remote_home/.local/bin/nono-exec"
-  ssh "$ssh_target" "chmod +x $remote_home/.local/bin/nono-exec"
-  rm -f "/tmp/nono-exec.sh"
-  ok "nono-exec"
-
-  # Deploy thin executor stubs
-  log "Deploying executor stubs"
-  ssh "$ssh_target" "mkdir -p $remote_home/bin"
-
-  for executor in claude codex gemini openclaw opencode pi; do
-    # Check if this executor is actually installed on the server
-    if ! ssh "$ssh_target" "PATH=\$(echo \"\$PATH\" | tr ':' '\\n' | grep -v \"^\$HOME/bin\$\" | tr '\\n' ':' | sed 's/:\$//') command -v $executor" >/dev/null 2>&1; then
-      continue  # Skip executors that aren't installed
-    fi
-
-    render_file "$TEMPLATES_DIR/nono-stub.sh.tmpl" "/tmp/nono-stub-$executor.sh"
-    scp -q "/tmp/nono-stub-$executor.sh" "$ssh_target:$remote_home/bin/$executor"
-    ssh "$ssh_target" "chmod +x $remote_home/bin/$executor"
-    rm -f "/tmp/nono-stub-$executor.sh"
-    ok "stub: ~/bin/$executor"
-  done
-
-  # Ensure ~/bin and ~/.local/bin are in PATH
-  # Both are needed: ~/bin for nono wrappers, ~/.local/bin for ty and other user tools
+  log "Ensuring ~/bin and ~/.local/bin are in PATH"
+  ssh "$ssh_target" "mkdir -p $remote_home/bin $remote_home/.local/bin"
   if ! ssh "$ssh_target" "grep -q 'export PATH=\$HOME/bin:\$HOME/.local/bin:\$PATH' $remote_home/.bashrc" 2>/dev/null; then
     # Remove any older partial PATH line we may have added before
     ssh "$ssh_target" "sed -i '/^export PATH=\\\$HOME\/bin:\\\$PATH$/d' $remote_home/.bashrc" 2>/dev/null || true
@@ -523,14 +377,6 @@ setup_nono() {
   else
     ok "PATH: ~/bin and ~/.local/bin already in .bashrc"
   fi
-
-  # Note: Plain-text .env files (e.g., linear-cli/.env) are NOT removed here.
-  # They are used by cron scripts (linear-poll.mjs) that run outside the nono
-  # sandbox. Agents cannot access these files because nono's Landlock sandbox
-  # restricts filesystem access to the paths defined in the profile.
-  # A future version could move cron scripts into the sandbox as well.
-
-  log "nono credential isolation setup complete"
 }
 
 # ── Slack module ──────────────────────────────────────────────────────────────
@@ -980,10 +826,8 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
   remote "touch $SERVER_HOME/notifications.jsonl"
   ok "notifications.jsonl"
 
-  # nono credential isolation
-  if [[ "$NONO_ENABLED" == "true" ]]; then
-    setup_nono "$SERVER_HOST" "$SERVER_HOME" || warn "nono setup failed, continuing without credential isolation"
-  fi
+  # Ensure ty and other user tools are on PATH
+  setup_path "$SERVER_HOST" "$SERVER_HOME"
 
   # Linear module
   if [[ "$LINEAR_ENABLED" == "true" ]]; then
@@ -1236,10 +1080,8 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
   exe_remote "touch $EXE_HOME/notifications.jsonl"
   ok "notifications.jsonl"
 
-  # nono credential isolation
-  if [[ "$NONO_ENABLED" == "true" ]]; then
-    setup_nono "$EXE_HOST" "$EXE_HOME" || warn "nono setup failed, continuing without credential isolation"
-  fi
+  # Ensure ty and other user tools are on PATH
+  setup_path "$EXE_HOST" "$EXE_HOME"
 
   # GM launcher script
   log "Setting up GM launcher"

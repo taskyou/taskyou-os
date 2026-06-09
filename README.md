@@ -131,7 +131,6 @@ Run `/taskyou-os:doctor` from any directory. It checks and updates everything au
 6. **CLAUDE.md drift** — detects new sections in the plugin template and offers to add them to your GM
 7. **Task event channel** — deploys the push-notification channel to a GM that predates it (renders `channel/`, installs deps, writes `.mcp.json`) and offers to add the channel flag to your launch alias
 8. **Security audit** — runs the server-side credential and permissions check
-9. **Credential isolation** — verifies nono sandbox setup and detects template drift
 
 If `/doctor` finds issues, it fixes what it can and tells you what to do for the rest.
 
@@ -139,7 +138,7 @@ If `/doctor` finds issues, it fixes what it can and tells you what to do for the
 
 ### Update the Server
 
-If you need to re-deploy server-side files (hooks, scripts, nono config) after a plugin update:
+If you need to re-deploy server-side files (hooks, scripts) after a plugin update:
 
 ```bash
 ./setup.sh server ~/Projects/gms/myproject
@@ -155,7 +154,6 @@ These are configured via flags in `config.env` during setup. They're part of the
 - **Slack** (`SLACK_ENABLED=true`) — Manage TaskYou from Slack: task events pushed to Slack, `@mentions`/DMs drive `ty` ([details](modules/slack/README.md))
 - **Cloudflare R2** (`R2_ENABLED=true`) — Public URLs for files and assets agents generate
 - **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories
-- **nono** (`NONO_ENABLED=true`) — Credential isolation for agents via sandboxed executor wrappers
 
 ## Manual Setup
 
