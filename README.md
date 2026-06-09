@@ -125,10 +125,13 @@ Run `/taskyou-os:doctor` from any directory. It checks and updates everything au
 4. **Executor health** — confirms every active task has a running executor pane, recovers orphaned tasks
 5. **Command migration** — removes old local command files that shadow newer plugin-delivered versions
 6. **CLAUDE.md drift** — detects new sections in the plugin template and offers to add them to your GM
-7. **Security audit** — runs the server-side credential and permissions check
-8. **Credential isolation** — verifies nono sandbox setup and detects template drift
+7. **Task event channel** — deploys the push-notification channel to a GM that predates it (renders `channel/`, installs deps, writes `.mcp.json`) and offers to add the channel flag to your launch alias
+8. **Security audit** — runs the server-side credential and permissions check
+9. **Credential isolation** — verifies nono sandbox setup and detects template drift
 
 If `/doctor` finds issues, it fixes what it can and tells you what to do for the rest.
+
+> **Enabling push notifications on an existing GM:** task events now arrive automatically as `<channel>` messages instead of needing a polling agent. Update the plugin, then run `/taskyou-os:doctor` — it deploys the channel and offers to add the required flag to your launch alias. After the alias change, **restart the GM** so the channel loads. (Channels are in research preview: they need Claude Code 2.1.80+ and a claude.ai login.)
 
 ### Update the Server
 
