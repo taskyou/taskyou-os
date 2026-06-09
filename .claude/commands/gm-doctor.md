@@ -362,15 +362,22 @@ test -d "$LOCAL_PROJECT_DIR/channel/node_modules" && echo "DEPS_INSTALLED" || ec
 
 4. **If channel exists, check for drift** — compare deployed channel against the plugin template (same approach as nono drift detection in Check 9). If the template is newer, update the deployed file and report WARN.
 
-5. **Check the shell alias** includes `--dangerously-load-development-channels server:taskyou`:
+5. **Check the shell alias** includes `--dangerously-load-development-channels server:taskyou`. This is the one step that doesn't self-heal, so make it as close to one-click as possible:
    ```bash
-   grep "$GM_ALIAS" ~/.zshrc 2>/dev/null || grep "$GM_ALIAS" ~/.bashrc 2>/dev/null
+   # Find which rc file defines the alias
+   for rc in ~/.zshrc ~/.bashrc; do grep -q "alias $GM_ALIAS=" "$rc" 2>/dev/null && echo "$rc"; done
    ```
-   - If the alias exists but doesn't include `--dangerously-load-development-channels server:taskyou`, report WARN and show the user the updated alias line they should use:
+   - If the alias already includes the flag, report PASS.
+   - If the alias exists but is missing the flag: build the corrected line (the existing alias body + ` --dangerously-load-development-channels server:taskyou` appended after `claude`), then **offer to update it in place** rather than making the user hand-edit:
+     > "Your `$GM_ALIAS` alias needs the channel flag to receive push notifications. Want me to update it in `<rc file>`? (I'll back the file up first.)"
+
+     On yes, replace just that alias line in the rc file (back up to `<rc>.bak` first), then tell the user to run `source <rc file>` and restart the GM for it to take effect. On no, show them the exact line to paste:
      ```
      alias <GM_ALIAS>='cd <LOCAL_PROJECT_DIR> && CLAUDE_CONFIG_DIR=<CONFIG_DIR> claude --dangerously-load-development-channels server:taskyou'
      ```
-   - If the alias already includes the flag, report PASS.
+   - If no alias is found at all, show the full line above and point them at the README "Updating" section.
+
+   Always end this step by reminding the user: **the channel only loads at launch, so restart the GM after any alias change.**
 
 6. **Check the CLAUDE.md** has the channel-based monitoring section (not the old background-agent approach):
    ```bash
