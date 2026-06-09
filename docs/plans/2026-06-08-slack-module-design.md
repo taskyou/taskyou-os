@@ -45,7 +45,7 @@ asks whether TaskYou-OS should close that gap, and how.
 | **Linear poller** (`linear-poll.mjs`) | `modules/linear/` (this repo) | **The template.** Polls Linear for `@agent` comments → `ty create/execute` → routes to projects by issue label → **posts diffs/results back** as Linear comments. State in `.linear-poll-state.json`, `LINEAR_TOKEN` auth, `.auth-failed` graceful degradation. A Slack module is a near-exact analog. |
 | **`notifications.jsonl`** + hooks (`templates/hooks/task.{blocked,completed,started}.tmpl`) | this repo | The push substrate. Each hook appends a JSON event the GM already tails. A Slack module tails the same file → `chat.postMessage`. |
 | **`ty-email` sidecar** (PR #371/#385) | `bborn/taskyou → extensions/ty-email` | The standalone-Go version of the same idea: email → LLM classify intent → `ty` CLI → reply/notify. A clean alternative template (adapter + classifier + bridge + state). |
-| Module convention | `config.env` flags (`LINEAR_ENABLED`, `R2_ENABLED`, `GITHUB_REPOS`, `NONO_ENABLED`) | Modules ship in-repo and toggle via env. A Slack module follows suit with `SLACK_ENABLED`. |
+| Module convention | `config.env` flags (`LINEAR_ENABLED`, `R2_ENABLED`, `GITHUB_REPOS`) | Modules ship in-repo and toggle via env. A Slack module follows suit with `SLACK_ENABLED`. |
 
 There is **no** existing Slack control surface. The only "Slack" in the workflow
 repo is marketing copy (PR #433 / task #1172), not an integration. So this is
@@ -150,8 +150,7 @@ modules/slack/
 - **Verify authenticity** — Slack signing-secret check (Events API) or Socket
   Mode's authenticated socket; never act on unverified payloads.
 - **No code execution from chat** — the LLM only *classifies*; the module only
-  calls `ty` subcommands. Pair with `nono` (`NONO_ENABLED`) for executor
-  credential isolation.
+  calls `ty` subcommands.
 - **Local secrets** — bot/app tokens in `config.env` (like `LINEAR_TOKEN`), never
   sent to the LLM. `.auth-failed`-style degradation keeps polling alive when
   tokens lapse, as the Linear module already does.

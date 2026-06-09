@@ -119,8 +119,7 @@ GM's `config.env` yourself and run `./setup.sh server <gm>` (or `exe`).
 - **Socket Mode** uses an authenticated WebSocket; there's no inbound HTTP
   endpoint to expose or verify.
 - **No code execution from chat** — the LLM only *classifies*; the bridge only
-  shells out to `ty`. Pair with `nono` (`NONO_ENABLED`) for executor credential
-  isolation.
+  shells out to `ty`.
 - **Local secrets** — tokens live in `~/scripts/slack/.env` (chmod 600), never
   sent to the LLM.
 
