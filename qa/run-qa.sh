@@ -97,6 +97,19 @@ grep -q 'The agents live on a remote server' "$GM_DIR/CLAUDE.md" && fail "CLAUDE
 grep -q 'daemon is running on this machine' "$SANDBOX/local.log" && pass "checklist shows local daemon step" || fail "checklist not local-aware"
 grep -q 'claude login' "$SANDBOX/local.log" && fail "checklist still tells you to 'claude login' on a server" || pass "checklist drops server-login steps"
 
+# ── 1c. Plugin SessionStart nudge hook (existing-GM onboarding) ──────────────
+echo; echo "[1c] plugin nudge hook — scoped + self-disabling"
+NUDGE="$SRC/hooks/channel-nudge.sh"
+# rendered GM HAS the channel → hook must stay silent
+out=$(printf '{"cwd":"%s","source":"startup"}' "$GM_DIR" | bash "$NUDGE" 2>/dev/null)
+[ -z "$out" ] && pass "nudge silent on a GM that already has the channel (self-disabling)" || fail "nudge fired on a channel-equipped GM"
+# synthetic GM missing the channel → hook must nudge toward /gm-doctor
+OLD="$SANDBOX/gm-old"; mkdir -p "$OLD/bin"; printf 'GM_ALIAS="x"\n' > "$OLD/config.env"; touch "$OLD/bin/ty-remote"
+printf '{"cwd":"%s","source":"startup"}' "$OLD" | bash "$NUDGE" 2>/dev/null | grep -q 'gm-doctor' && pass "nudge fires on a GM missing the channel" || fail "nudge did not fire on a channel-less GM"
+# non-GM dir → silent
+out=$(printf '{"cwd":"%s","source":"startup"}' "$SANDBOX" | bash "$NUDGE" 2>/dev/null)
+[ -z "$out" ] && pass "nudge silent outside a GM dir" || fail "nudge fired outside a GM dir"
+
 # ── 2. Channel smoke test (PR #28's own test) ────────────────────────────────
 echo; echo "[2] channel smoke-test (handshake + capabilities + tools)"
 cp "$SRC/templates/channel/smoke-test.ts" "$GM_DIR/channel/smoke-test.ts"

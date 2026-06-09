@@ -115,6 +115,10 @@ The taskyou-os plugin updates through the Claude Code marketplace. Run:
 
 This pulls the latest version. Restart Claude Code afterward for changes to take effect.
 
+**Tip: enable auto-update** so you get new features without checking manually. Auto-update is off by default for third-party marketplaces — turn it on via `/plugin` → **Marketplaces** → taskyou-os → *Enable auto-update*. Once on, Claude Code pulls new plugin versions for you and prompts you to `/reload-plugins`.
+
+When a new plugin version adds a feature your existing GM doesn't have yet (e.g. the task-event channel), the GM will **proactively offer to enable it** at launch — just say yes, and it runs `/gm-doctor` for you. No need to track releases.
+
 ### Update a GM Installation
 
 Run `/taskyou-os:doctor` from any directory. It checks and updates everything automatically:
