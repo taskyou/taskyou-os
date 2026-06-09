@@ -21,13 +21,40 @@ as the `ty-slack` systemd user service. Enable with `SLACK_ENABLED=true` in
   `SLACK_NOTIFY_CHANNEL`.
 - **Inbound.** Slack **Socket Mode** (no public URL) delivers `app_mention` and
   DM events. The bridge checks the sender against `SLACK_ALLOWED_USERS`,
-  classifies intent (Anthropic API if `ANTHROPIC_API_KEY` is set, otherwise a
-  built-in keyword heuristic), and runs the matching `ty` command. Replies go
-  in-thread.
+  classifies intent, and runs the matching `ty` command. Replies go in-thread.
 
-The bridge is **dependency-free** — raw `fetch` to the Slack and Anthropic HTTP
-APIs plus the global `WebSocket` (Node 22+). No `npm install`, mirroring the
-Linear poller.
+**Classifier (no API key by default).** Intent classification prefers the on-box
+`claude` CLI (`claude -p`) — the same already-authenticated tool the GM and
+executors use, so no separate `ANTHROPIC_API_KEY` is needed. It falls back to the
+Anthropic API if `SLACK_ANTHROPIC_API_KEY` is set, then to a dependency-free
+keyword heuristic. Override with `SLACK_CLASSIFIER=claude|api|heuristic`.
+
+The bridge is **dependency-free** — raw `fetch` to the Slack (and optional
+Anthropic) HTTP APIs plus the global `WebSocket` (Node 22+). No `npm install`,
+mirroring the Linear poller.
+
+## Runaway / cost protection
+
+Because classification spends tokens, the bridge is bounded on every axis:
+
+- **No self-loop.** The bridge ignores its own posts and any bot/edited/system
+  message (`bot_id` / `subtype` / `BOT_USER_ID`), so a reply can never trigger
+  another classification.
+- **`claude -p` is sandboxed per call:** `--strict-mcp-config --mcp-config {}`
+  (no MCP servers) + `--disallowedTools …` (no Bash/Read/Write/…) keep it to a
+  **single turn** with no agentic spiral; `--max-budget-usd` (default `0.05`) is
+  a hard cost ceiling; plus a wall-clock timeout and capped output buffer. One
+  attempt, no retry — on any failure it falls back.
+- **Concurrency cap.** At most `SLACK_MAX_CONCURRENT` (default 3) classifications
+  run at once; extra messages are politely declined, not queued — so a burst
+  can't fan out into unbounded subprocesses or spend.
+- **Slack-retry safe.** Envelopes are acked in <3s (stops Slack re-sending) and
+  deduped by `event_id`.
+- **Outbound rate cap.** The notifications poller posts at most
+  `SLACK_MAX_NOTIFS_PER_POLL` (default 25) per tick and drains the rest later, so
+  an abnormal flood can't storm Slack. A lost/corrupt state file skips the
+  backlog rather than replaying history. Only complete lines are consumed (a
+  half-written hook line is held for the next tick).
 
 ## Setup
 
@@ -54,8 +81,11 @@ Linear poller.
 | `SLACK_NOTIFY_CHANNEL` | channel for task pings not tied to a Slack thread (e.g. `#taskyou`) |
 | `SLACK_ALLOWED_USERS` | comma-separated Slack user IDs allowed to drive `ty` |
 | `SLACK_PROJECT_MAP` | JSON map of Slack channel → ty project, e.g. `{"#eng":"workflow"}` |
-| `SLACK_ANTHROPIC_API_KEY` | optional — enables LLM intent classification |
+| `SLACK_ANTHROPIC_API_KEY` | optional — use the Anthropic API instead of the on-box `claude` CLI |
 | `SLACK_CLASSIFIER_MODEL` | classifier model (default `claude-haiku-4-5-20251001`) |
+| `SLACK_CLASSIFY_BUDGET_USD` | hard `$`/call cap for `claude -p` (default `0.05`) |
+| `SLACK_MAX_CONCURRENT` | max in-flight classifications (default `3`) |
+| `SLACK_MAX_NOTIFS_PER_POLL` | max Slack posts per poll tick (default `25`) |
 
 ## Usage
 

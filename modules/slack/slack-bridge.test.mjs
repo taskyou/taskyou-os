@@ -8,6 +8,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   stripMention,
@@ -17,6 +19,8 @@ import {
   parseIntentResponse,
   heuristicIntent,
   formatNotification,
+  buildClassifierContext,
+  readNewChunk,
 } from "./slack-bridge.mjs";
 
 test("stripMention removes the bot mention and trims", () => {
@@ -109,4 +113,39 @@ test("formatNotification renders each event type", () => {
   );
   assert.match(formatNotification({ event: "failed", task_id: "3", title: "Oops" }), /failed.*Oops/);
   assert.match(formatNotification({ event: "weird", task_id: "4", title: "Huh" }), /Task #4/);
+});
+
+test("buildClassifierContext includes thread + open tasks + message", () => {
+  const ctx = buildClassifierContext("do the thing", {
+    threadTaskId: "12",
+    openTasks: [{ id: 1, title: "A" }, { id: 2, title: "B" }],
+  });
+  assert.match(ctx, /thread for task #12/);
+  assert.match(ctx, /#1 A; #2 B/);
+  assert.match(ctx, /Message: do the thing/);
+  // minimal case: just the message
+  assert.equal(buildClassifierContext("hi", {}), "Message: hi");
+});
+
+test("readNewChunk: only complete lines; partial last line is held back", () => {
+  const f = join(import.meta.dirname, ".test-notif.tmp");
+  try {
+    // three complete lines, then a half-written one (no trailing newline)
+    writeFileSync(f, 'a\nb\nc\n{"half":');
+    const r = readNewChunk(f, 0);
+    assert.deepEqual(r.lines, ["a", "b", "c"]); // partial line excluded
+    assert.equal(r.baseOffset, 0);
+
+    // cursor at EOF of the complete portion → nothing new
+    const consumed = Buffer.byteLength("a\nb\nc\n", "utf8");
+    assert.deepEqual(readNewChunk(f, consumed).lines, []);
+
+    // first run (null) skips the backlog entirely
+    assert.deepEqual(readNewChunk(f, null).lines, []);
+
+    // truncation/rotation: offset past EOF resets to start
+    assert.deepEqual(readNewChunk(f, 9999).lines, ["a", "b", "c"]);
+  } finally {
+    rmSync(f, { force: true });
+  }
 });

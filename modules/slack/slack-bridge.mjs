@@ -71,8 +71,21 @@ const CONFIG = {
   notificationsFile:
     process.env.NOTIFICATIONS_FILE ||
     join(process.env.HOME || ".", "notifications.jsonl"),
+  // Classifier: prefer the on-box, already-authenticated `claude` CLI (claude.ai
+  // login — same primitive the GM/executors use, no API key). Fall back to the
+  // Anthropic API only if a key is set, then a dependency-free keyword heuristic.
+  classifierMode: process.env.SLACK_CLASSIFIER || "auto", // auto | claude | api | heuristic
+  claudeBin: process.env.CLAUDE_BIN || "claude",
   anthropicKey: process.env.ANTHROPIC_API_KEY || "",
-  anthropicModel: process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001",
+  classifierModel:
+    process.env.SLACK_CLASSIFIER_MODEL ||
+    process.env.ANTHROPIC_MODEL ||
+    "claude-haiku-4-5-20251001",
+  // Runaway-cost guards (see classifyViaClaude):
+  classifyBudgetUsd: process.env.SLACK_CLASSIFY_BUDGET_USD || "0.05", // hard $/call cap
+  classifyTimeoutMs: parseInt(process.env.SLACK_CLASSIFY_TIMEOUT_MS || "60000", 10),
+  maxConcurrentClassify: parseInt(process.env.SLACK_MAX_CONCURRENT || "3", 10),
+  maxNotifsPerPoll: parseInt(process.env.SLACK_MAX_NOTIFS_PER_POLL || "25", 10),
   pollIntervalMs: parseInt(process.env.SLACK_POLL_INTERVAL_MS || "5000", 10),
 };
 
@@ -317,11 +330,9 @@ const CLASSIFIER_SYSTEM = [
   "Otherwise create_task. Never include commentary outside the JSON.",
 ].join("\n");
 
-async function classifyIntent(text, { threadTaskId, openTasks } = {}) {
-  if (!CONFIG.anthropicKey) {
-    return heuristicIntent(text, { threadTaskId });
-  }
-  const context = [
+// Pure: assemble the user-facing context block (exported for tests).
+export function buildClassifierContext(text, { threadTaskId, openTasks } = {}) {
+  return [
     threadTaskId ? `This message is in the thread for task #${threadTaskId}.` : "",
     openTasks && openTasks.length
       ? `Open tasks: ${openTasks
@@ -333,7 +344,67 @@ async function classifyIntent(text, { threadTaskId, openTasks } = {}) {
   ]
     .filter(Boolean)
     .join("\n");
+}
 
+// Detect the on-box claude CLI once (cached).
+let _claudeChecked = false;
+let _claudeAvailable = false;
+function hasClaudeCli() {
+  if (_claudeChecked) return _claudeAvailable;
+  _claudeChecked = true;
+  try {
+    execFileSync(CONFIG.claudeBin, ["--version"], { stdio: "ignore", timeout: 10_000 });
+    _claudeAvailable = true;
+  } catch {
+    _claudeAvailable = false;
+  }
+  return _claudeAvailable;
+}
+
+// Classify via the local, already-authenticated `claude` CLI — no API key.
+// Hardened so a hostile or odd Slack message can't trigger an agentic loop or
+// runaway spend:
+//   --strict-mcp-config --mcp-config {} → no MCP servers (no taskyou/other tools)
+//   --disallowedTools ...               → no Bash/Read/Write/etc. → single turn
+//   --max-budget-usd                    → hard per-call cost ceiling
+//   timeout + maxBuffer, no retry       → bounded wall-clock + memory
+// Any failure returns null so the caller falls back (API → heuristic).
+function classifyViaClaude(prompt) {
+  try {
+    const out = execFileSync(
+      CONFIG.claudeBin,
+      [
+        "-p",
+        "--output-format", "json",
+        "--model", CONFIG.classifierModel,
+        "--strict-mcp-config",
+        "--mcp-config", '{"mcpServers":{}}',
+        "--disallowedTools",
+        "Bash,Read,Edit,Write,WebFetch,WebSearch,Task,Glob,Grep,NotebookEdit",
+        "--max-budget-usd", String(CONFIG.classifyBudgetUsd),
+      ],
+      {
+        input: prompt,
+        encoding: "utf8",
+        timeout: CONFIG.classifyTimeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+      }
+    );
+    let text = out;
+    try {
+      const env = JSON.parse(out);
+      if (env && typeof env.result === "string") text = env.result;
+    } catch {
+      /* not a JSON envelope — treat stdout as the raw answer */
+    }
+    return parseIntentResponse(text);
+  } catch (err) {
+    log(`claude -p classify failed (${err.message}); falling back`);
+    return null;
+  }
+}
+
+async function classifyViaApi(context) {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -343,19 +414,36 @@ async function classifyIntent(text, { threadTaskId, openTasks } = {}) {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: CONFIG.anthropicModel,
-        max_tokens: 512,
+        model: CONFIG.classifierModel,
+        max_tokens: 512, // bounded output
         system: CLASSIFIER_SYSTEM,
         messages: [{ role: "user", content: context }],
       }),
     });
     const json = await res.json();
     const out = json.content?.map((c) => c.text || "").join("") || "";
-    const parsed = parseIntentResponse(out);
-    if (parsed && parsed.action) return parsed;
+    return parseIntentResponse(out);
   } catch (err) {
-    log(`classifier error, falling back to heuristic: ${err.message}`);
+    log(`anthropic api classify failed (${err.message}); falling back`);
+    return null;
   }
+}
+
+async function classifyIntent(text, { threadTaskId, openTasks } = {}) {
+  const mode = CONFIG.classifierMode;
+  const context = buildClassifierContext(text, { threadTaskId, openTasks });
+
+  // 1) On-box claude CLI (default). No API key; reuses claude.ai login.
+  if ((mode === "auto" || mode === "claude") && hasClaudeCli()) {
+    const r = classifyViaClaude(`${CLASSIFIER_SYSTEM}\n\n${context}`);
+    if (r && r.action) return r;
+  }
+  // 2) Anthropic API, only if a key is explicitly configured.
+  if ((mode === "auto" || mode === "api") && CONFIG.anthropicKey) {
+    const r = await classifyViaApi(context);
+    if (r && r.action) return r;
+  }
+  // 3) Dependency-free keyword heuristic — no network, no spend.
   return heuristicIntent(text, { threadTaskId });
 }
 
@@ -365,9 +453,13 @@ async function classifyIntent(text, { threadTaskId, openTasks } = {}) {
 
 let BOT_USER_ID = "";
 const seenEvents = new Set(); // event_id dedup (Slack retries)
+let inFlight = 0; // concurrent classify/dispatch — bounds claude -p spawns + spend
 
 async function handleMessageEvent(event, state) {
-  // Ignore anything from a bot (including ourselves) and edited/system messages.
+  // Self-loop guard: never react to our own posts or any bot/edited/system
+  // message. Our replies carry bot_id (and subtype bot_message), so these
+  // filters prevent an infinite reply→classify→reply loop even if BOT_USER_ID
+  // failed to resolve at startup.
   if (event.bot_id || event.subtype) return;
   if (event.user && event.user === BOT_USER_ID) return;
 
@@ -382,22 +474,38 @@ async function handleMessageEvent(event, state) {
 
   const channel = event.channel;
   const threadTs = event.thread_ts || event.ts;
-  const threadTaskId = state.threads[event.thread_ts] || null;
 
-  let openTasks = [];
-  try {
-    openTasks = JSON.parse(ty(["list", "--all", "--json"]));
-  } catch {
-    /* listing is best-effort context only */
+  // Concurrency cap: don't let a burst of messages spawn unbounded classifier
+  // subprocesses (CPU + token spend). Excess requests are declined, not queued.
+  if (inFlight >= CONFIG.maxConcurrentClassify) {
+    log(`busy (${inFlight} in flight) — declining message from ${requester}`);
+    try {
+      await postMessage(channel, ":hourglass: One sec — finishing a few requests. Try again in a moment.", threadTs);
+    } catch {}
+    return;
   }
 
-  const intent = await classifyIntent(text, { threadTaskId, openTasks });
-  log(`intent: ${intent.action}${intent.task_id ? ` #${intent.task_id}` : ""}`);
-
+  inFlight++;
   try {
-    await dispatchIntent(intent, { channel, threadTs, requester, text }, state);
-  } catch (err) {
-    await postMessage(channel, `:x: ${err.message}`, threadTs);
+    const threadTaskId = state.threads[event.thread_ts] || null;
+
+    let openTasks = [];
+    try {
+      openTasks = JSON.parse(ty(["list", "--all", "--json"]));
+    } catch {
+      /* listing is best-effort context only */
+    }
+
+    const intent = await classifyIntent(text, { threadTaskId, openTasks });
+    log(`intent: ${intent.action}${intent.task_id ? ` #${intent.task_id}` : ""}`);
+
+    try {
+      await dispatchIntent(intent, { channel, threadTs, requester, text }, state);
+    } catch (err) {
+      await postMessage(channel, `:x: ${err.message}`, threadTs);
+    }
+  } finally {
+    inFlight--;
   }
 }
 
@@ -491,35 +599,63 @@ const HELP_TEXT = [
 // Outbound: notifications.jsonl → Slack
 // ═════════════════════════════════════════════════════════════════════════════
 
-function readNewLines(path, fromOffset) {
-  // Returns { lines, offset }. On first read (fromOffset === null) we skip the
-  // existing backlog and just record EOF. Handles truncation/rotation.
-  if (!existsSync(path)) return { lines: [], offset: fromOffset };
+export function readNewChunk(path, fromOffset) {
+  // Returns { lines, baseOffset } where `lines` are COMPLETE raw lines only (up
+  // to the last newline) — a half-written hook line is left for the next tick
+  // instead of being parsed-then-skipped (which would lose it). On first read
+  // (fromOffset === null) we skip the existing backlog. Handles truncation.
+  if (!existsSync(path)) return { lines: [], baseOffset: fromOffset };
   const size = statSync(path).size;
-  if (fromOffset === null) return { lines: [], offset: size };
-  if (size < fromOffset) fromOffset = 0; // file shrank → rotated/truncated
-  if (size === fromOffset) return { lines: [], offset: size };
+  if (fromOffset === null) return { lines: [], baseOffset: size };
+  let base = fromOffset;
+  if (size < base) base = 0; // file shrank → rotated/truncated
+  if (size === base) return { lines: [], baseOffset: base };
 
   const fd = openSync(path, "r");
   try {
-    const len = size - fromOffset;
+    const len = size - base;
     const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, fromOffset);
-    const text = buf.toString("utf8");
-    const lines = text.split("\n").filter((l) => l.trim());
-    return { lines, offset: size };
+    readSync(fd, buf, 0, len, base);
+    const lastNl = buf.lastIndexOf(0x0a);
+    if (lastNl === -1) return { lines: [], baseOffset: base }; // no complete line yet
+    const text = buf.toString("utf8", 0, lastNl + 1);
+    const lines = text.split("\n").slice(0, -1); // raw lines, keep byte parity
+    return { lines, baseOffset: base };
   } finally {
     closeSync(fd);
   }
 }
 
 async function pollNotifications(state) {
-  const { lines, offset } = readNewLines(CONFIG.notificationsFile, state.notifyOffset);
-  if (offset !== state.notifyOffset) {
-    state.notifyOffset = offset;
+  const { lines, baseOffset } = readNewChunk(CONFIG.notificationsFile, state.notifyOffset);
+
+  // First run (no cursor yet): just record EOF, skipping the backlog. This also
+  // means a lost/corrupt state file does NOT replay history into Slack.
+  if (state.notifyOffset === null) {
+    state.notifyOffset = baseOffset;
     saveState(state);
+    return;
   }
-  for (const line of lines) {
+  if (lines.length === 0) {
+    if (baseOffset !== state.notifyOffset) {
+      state.notifyOffset = baseOffset;
+      saveState(state);
+    }
+    return;
+  }
+
+  // Rate cap: an abnormal flood (or a misconfigured file) can't storm Slack.
+  // Excess lines aren't dropped — we advance the cursor only past what we post
+  // and drain the rest on later ticks (byte-accurate so nothing is skipped).
+  const take = lines.slice(0, CONFIG.maxNotifsPerPoll);
+  if (take.length < lines.length) {
+    log(`notifications: ${take.length}/${lines.length} this tick (cap ${CONFIG.maxNotifsPerPoll}); draining rest`);
+  }
+  state.notifyOffset = baseOffset + Buffer.byteLength(take.join("\n") + "\n", "utf8");
+  saveState(state); // advance BEFORE posting so a failed post never re-storms
+
+  for (const line of take) {
+    if (!line.trim()) continue;
     let event;
     try {
       event = JSON.parse(line);
@@ -554,15 +690,23 @@ async function openSocket() {
   return json.url;
 }
 
+// Monotonic generation: only the newest connection's handlers stay live, so a
+// reconnect race can't leave two sockets both delivering events (which would
+// double-process every message and multiply classifier spend).
+let socketGen = 0;
+
 function connectSocket(state) {
+  const gen = ++socketGen;
   let ws;
   openSocket()
     .then((url) => {
+      if (gen !== socketGen) return; // superseded while connecting — abandon
       ws = new WebSocket(url);
 
       ws.addEventListener("open", () => log("Socket Mode connected"));
 
       ws.addEventListener("message", (ev) => {
+        if (gen !== socketGen) return; // stale socket — ignore
         let frame;
         try {
           frame = JSON.parse(ev.data);
@@ -579,7 +723,9 @@ function connectSocket(state) {
           return;
         }
 
-        // Ack every envelope immediately (Slack requires < 3s).
+        // Ack every envelope immediately (Slack requires < 3s). Acking before we
+        // process also stops Slack from retrying the event (and re-triggering
+        // classification); event_id dedup below catches any that still slip.
         if (frame.envelope_id) {
           try {
             ws.send(JSON.stringify({ envelope_id: frame.envelope_id }));
@@ -607,6 +753,7 @@ function connectSocket(state) {
       });
 
       ws.addEventListener("close", () => {
+        if (gen !== socketGen) return; // a newer socket already took over
         log("Socket closed; reconnecting in 3s");
         setTimeout(() => connectSocket(state), 3000);
       });
@@ -619,6 +766,7 @@ function connectSocket(state) {
       });
     })
     .catch((err) => {
+      if (gen !== socketGen) return;
       log(`openSocket failed: ${err.message}; retrying in 10s`);
       setTimeout(() => connectSocket(state), 10_000);
     });

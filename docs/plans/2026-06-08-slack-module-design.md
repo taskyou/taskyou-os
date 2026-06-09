@@ -4,11 +4,18 @@
 > `README.md`, tests), `templates/ty-slack.service.tmpl`, and the `SLACK_*`
 > wiring in `setup.sh` + `config.example.env`. This doc is the design rationale.
 >
-> One refinement landed during build: the bridge runs **on the agents server**
-> (next to `ty` + `notifications.jsonl`), so it reads the file and runs `ty`
-> **directly** — no `runRemote()`/SSH needed. It's a zero-dependency Node `.mjs`
-> (matching the Linear poller) rather than bun/TS, because the server has Node
-> (bun is a GM-machine prereq). Outbound + inbound both shipped.
+> Two refinements landed during build:
+> 1. The bridge runs **on the agents server** (next to `ty` + `notifications.jsonl`),
+>    so it reads the file and runs `ty` **directly** — no `runRemote()`/SSH. It's a
+>    zero-dependency Node `.mjs` (matching the Linear poller) rather than bun/TS,
+>    because the server has Node (bun is a GM-machine prereq).
+> 2. Intent classification defaults to the **on-box `claude` CLI** (`claude -p`,
+>    claude.ai login — no API key, the same primitive the GM/executors use), with
+>    the Anthropic API as an optional fallback and a keyword heuristic last. The
+>    CLI call is hardened against runaway spend: no MCP/tools (single turn),
+>    `--max-budget-usd` cap, timeout; plus a concurrency cap, self-loop guards,
+>    and an outbound rate cap. See "Runaway / cost protection" in
+>    `modules/slack/README.md`. Outbound + inbound both shipped.
 > Origin: TaskYou task #3723 — "Explore taskyou MCP sidecar extension for Slack"
 > TL;DR: Add a **`modules/slack/`** integration. Now that the channels work
 > (#28) and local/macOS support (#31) are **merged**, this is small: a Slack
