@@ -1,0 +1,40 @@
+# TaskYou Slack app manifest.
+# Create the app in one step: https://api.slack.com/apps → Create New App →
+# "From an app manifest" → pick your workspace → paste this file → Create.
+#
+# This pre-configures Socket Mode, the bot scopes, and the event subscriptions
+# the bridge needs. Two things a manifest can't mint for you, so do them after:
+#   1. Basic Information → App-Level Tokens → Generate (scope: connections:write)
+#      → this is your SLACK_APP_TOKEN (xapp-…).
+#   2. OAuth & Permissions → Install to Workspace → copy the Bot User OAuth
+#      Token → this is your SLACK_BOT_TOKEN (xoxb-…).
+# Then run:  ./setup.sh slack <your-gm-dir>
+display_information:
+  name: TaskYou
+  description: Manage TaskYou tasks from Slack
+  background_color: "#1a1a1a"
+features:
+  bot_user:
+    display_name: taskyou
+    always_online: true
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - app_mentions:read
+      - im:history
+      - channels:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

@@ -58,18 +58,35 @@ Because classification spends tokens, the bridge is bounded on every axis:
 
 ## Setup
 
-1. Create a Slack app (https://api.slack.com/apps).
-   - **Socket Mode:** on. Generate an app-level token with `connections:write`
-     → `SLACK_APP_TOKEN` (`xapp-…`).
-   - **Bot token scopes:** `chat:write`, `app_mentions:read`, `im:history`,
-     `channels:read` → install to workspace → `SLACK_BOT_TOKEN` (`xoxb-…`).
-   - **Event Subscriptions:** subscribe to bot events `app_mention` and
-     `message.im`.
-   - Invite the bot to the channel(s) you want it to watch / post in.
-2. Fill in the Slack section of `config.env` (see `config.example.env`).
-3. `./setup.sh server <project-dir>` (or `exe`). This installs the bridge to
-   `~/scripts/slack/`, writes `~/scripts/slack/.env`, and enables the
-   `ty-slack` systemd service.
+1. **Create the app from the manifest.** https://api.slack.com/apps → *Create
+   New App* → *From an app manifest* → pick your workspace → paste
+   [`manifest.yaml`](manifest.yaml) → *Create*. (Pre-sets Socket Mode, the bot
+   scopes, and the event subscriptions — no manual toggles.)
+2. **Mint two tokens** (a manifest can't):
+   - *Basic Information → App-Level Tokens → Generate* with `connections:write`
+     → `xapp-…` (`SLACK_APP_TOKEN`).
+   - *OAuth & Permissions → Install to Workspace* → copy the **Bot User OAuth
+     Token** `xoxb-…` (`SLACK_BOT_TOKEN`).
+3. **Run the wizard** for your GM:
+   ```bash
+   ./setup.sh slack ~/Projects/gms/<gm>
+   ```
+   It takes the two tokens, resolves your Slack user from your email (via the
+   bot token), writes the `SLACK_*` block into that GM's `config.env`, and
+   installs + enables the bridge (systemd on a server/exe.dev; rendered files on
+   a local Mac). Leave the app token blank for **outbound-only** (pings, no
+   inbound control).
+4. **Invite the bot** to your notify channel in Slack: `/invite @taskyou`.
+
+A few minutes, no hand-editing config or hunting for member IDs.
+
+<details>
+<summary>Manual setup (without the wizard)</summary>
+
+Do steps 1–2, then put the `SLACK_*` block (see `config.example.env`) into the
+GM's `config.env` yourself and run `./setup.sh server <gm>` (or `exe`).
+`SLACK_ALLOWED_USERS` takes Slack **member IDs** (profile → More → Copy member ID).
+</details>
 
 ## Config
 
