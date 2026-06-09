@@ -569,6 +569,21 @@ is_local_server() {
 setup_server_local() {
   log "Setting up local server (this machine — no SSH, no systemd)"
 
+  # Preflight: local mode assumes ty is installed and its daemon runs on THIS
+  # box (we register projects + install hooks locally). Without these, setup
+  # would "succeed" but no task events would ever fire — fail loudly instead.
+  if ! command -v ty >/dev/null 2>&1; then
+    echo "Error: 'ty' is not on PATH, but SERVER_HOST is local."
+    echo "Install TaskYou first (the daemon must run on this machine), then re-run."
+    exit 1
+  fi
+  if ty daemon status >/dev/null 2>&1 || pgrep -f 'ty daemon' >/dev/null 2>&1; then
+    ok "ty daemon detected"
+  else
+    warn "ty daemon does not appear to be running on this machine."
+    warn "Start it (e.g. 'ty daemon') so task hooks fire and the channel sees events."
+  fi
+
   local home_dir="${SERVER_HOME:-$HOME}"
   # Ensure templates that reference {{SERVER_HOME}} (e.g. the hooks' notifications
   # path) render against the resolved local home even if SERVER_HOME was blank.
