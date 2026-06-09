@@ -308,6 +308,9 @@ setup_local() {
   ok "channel/taskyou-channel.ts"
   render_file "$TEMPLATES_DIR/channel/package.json.tmpl" "$LOCAL_PROJECT_DIR/channel/package.json"
   ok "channel/package.json"
+  # Ship the smoke test alongside the channel so /gm-doctor can self-check it
+  cp "$TEMPLATES_DIR/channel/smoke-test.ts" "$LOCAL_PROJECT_DIR/channel/smoke-test.ts"
+  ok "channel/smoke-test.ts"
   # Install channel dependencies
   (cd "$LOCAL_PROJECT_DIR/channel" && bun install --silent 2>/dev/null) || warn "bun install failed — run 'cd $LOCAL_PROJECT_DIR/channel && bun install' manually"
 

@@ -360,7 +360,7 @@ test -d "$LOCAL_PROJECT_DIR/channel/node_modules" && echo "DEPS_INSTALLED" || ec
    ```
    Report WARN: "Installed missing channel dependencies."
 
-4. **If channel exists, check for drift** — compare deployed channel against the plugin template (same approach as nono drift detection in Check 8). If the template is newer, update the deployed file and report WARN.
+4. **If channel exists, check for drift** — compare deployed channel against the plugin template (same approach as nono drift detection in Check 9). If the template is newer, update the deployed file and report WARN.
 
 5. **Check the shell alias** includes `--dangerously-load-development-channels server:taskyou`:
    ```bash
@@ -379,7 +379,16 @@ test -d "$LOCAL_PROJECT_DIR/channel/node_modules" && echo "DEPS_INSTALLED" || ec
    ```
    - If it has "background monitoring agent" but not "Task event channel", the CLAUDE.md needs updating. Render the Task Tracking section from the template and show the user the diff, offering to update it.
 
-**If all channel files exist, deps installed, alias correct:** Report PASS with "Task event channel active."
+7. **Runtime self-check** — confirm the channel actually boots and completes the MCP handshake (catches a broken render, a missing/corrupt dep, or a bad bun). The smoke test ships next to the channel:
+   ```bash
+   test -f "$LOCAL_PROJECT_DIR/channel/smoke-test.ts" && \
+     ( cd "$LOCAL_PROJECT_DIR/channel" && timeout 30 bun run smoke-test.ts )
+   ```
+   - Exit 0 (ends with `PASSED`): report PASS "channel boots + handshakes."
+   - Non-zero or `FAILED`: report WARN with the smoke-test output — the channel is registered but won't push events until fixed.
+   - If `smoke-test.ts` is absent (GM predates this), copy it from `templates/channel/smoke-test.ts` in the plugin and re-run.
+
+**If all channel files exist, deps installed, alias correct, and the smoke test passes:** Report PASS with "Task event channel active."
 **If deployed or fixed anything:** Report WARN with summary.
 **If templates not found:** Report FAIL with "Channel templates not found. Update the TaskYou-OS plugin first."
 
