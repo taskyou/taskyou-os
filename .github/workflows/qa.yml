@@ -1,0 +1,30 @@
+name: QA harness
+
+# Validates the generated GM system end-to-end: renders the real setup.sh into a
+# throwaway $HOME, smoke-tests the channel MCP server, and drives a real hook all
+# the way to a channel push. Hermetic — nothing touches the runner's home beyond
+# the sandbox dir. ty is not installed; its assertions are skipped (CI mode).
+
+on:
+  pull_request:
+    paths:
+      - "setup.sh"
+      - "templates/channel/**"
+      - "templates/hooks/**"
+      - "templates/mcp.json.tmpl"
+      - "qa/**"
+      - ".github/workflows/qa.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # run-qa.sh creates a worktree of HEAD
+      - uses: oven-sh/setup-bun@v2
+      - name: Run QA harness
+        run: bash qa/run-qa.sh

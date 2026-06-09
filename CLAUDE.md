@@ -20,6 +20,7 @@ This is the TaskYouOS template repo. It generates fully working AI agent managem
 
 - Templates are the source of truth. Never edit generated output — edit the template.
 - Test changes by running `./setup.sh local /tmp/test-project` with a test config.env.
+- For channel/hook/setup changes, run the hermetic QA harness: `qa/run-qa.sh` (sandboxed `$HOME`, never touches your real ty/GMs). See `qa/README.md`.
 - If you have an existing GM at `~/Projects/gms/<name>/`, use it as a reference implementation.
 
 ## Adding New Templates
