@@ -20,6 +20,7 @@ usage() {
   echo "  server  — Provision the remote server only"
   echo "  exe     — Deploy GM to an exe.dev VM"
   echo "  all     — Both local and server"
+  echo "  slack   — Guided Slack setup wizard for an existing GM"
   echo ""
   echo "The project-dir must contain a config.env file."
   echo "See config.example.env for all available variables."
@@ -195,8 +196,8 @@ MODE="$1"
 PROJECT_DIR="$(cd "$2" && pwd 2>/dev/null || echo "$2")"
 CONFIG_FILE="$PROJECT_DIR/config.env"
 
-if [[ "$MODE" != "local" && "$MODE" != "server" && "$MODE" != "exe" && "$MODE" != "all" ]]; then
-  echo "Error: mode must be local, server, exe, or all"
+if [[ "$MODE" != "local" && "$MODE" != "server" && "$MODE" != "exe" && "$MODE" != "all" && "$MODE" != "slack" ]]; then
+  echo "Error: mode must be local, server, exe, all, or slack"
   usage
 fi
 
@@ -593,6 +594,155 @@ EOF
   fi
 }
 
+# Install the Slack bridge when the daemon is on THIS machine (local/macOS):
+# render the script + .env; no systemd (operator starts it or adds a launchd
+# agent). $1 = home dir.
+setup_slack_local() {
+  local home_dir="$1"
+
+  log "Setting up Slack integration (local)"
+  local slack_dir="$home_dir/scripts/slack"
+  mkdir -p "$slack_dir"
+  cp "$MODULES_DIR/slack/slack-bridge.mjs" "$slack_dir/slack-bridge.mjs"
+  chmod +x "$slack_dir/slack-bridge.mjs"
+
+  local project_map_json="$SLACK_PROJECT_MAP"
+  [[ -z "$project_map_json" ]] && project_map_json="{}"
+  local default_project
+  default_project=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
+  cat > "$slack_dir/.env" <<EOF
+SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
+SLACK_APP_TOKEN=$SLACK_APP_TOKEN
+SLACK_NOTIFY_CHANNEL=$SLACK_NOTIFY_CHANNEL
+SLACK_ALLOWED_USERS=$SLACK_ALLOWED_USERS
+SLACK_PROJECT_MAP=$project_map_json
+DEFAULT_PROJECT=$default_project
+TY_PATH=$(command -v ty)
+NOTIFICATIONS_FILE=$home_dir/notifications.jsonl
+ANTHROPIC_API_KEY=$SLACK_ANTHROPIC_API_KEY
+ANTHROPIC_MODEL=$SLACK_CLASSIFIER_MODEL
+EOF
+  chmod 600 "$slack_dir/.env"
+  ok "slack-bridge installed: $slack_dir"
+  warn "Local mode: start it with 'node $slack_dir/slack-bridge.mjs' (or a launchd agent)."
+}
+
+# ── Slack setup wizard (./setup.sh slack <project-dir>) ───────────────────────
+
+# Prompt for a value. Default shown is the current value (from config on a
+# re-run) so pressing enter keeps it and typing a new value updates it. A
+# WIZ_<VAR> env var pre-answers non-interactively (for tests/scripts) without
+# colliding with the sourced config; a closed stdin keeps the current/default.
+ask() {
+  local __var="$1" __prompt="$2"
+  local __override="WIZ_${__var}"
+  if [[ -n "${!__override:-}" ]]; then printf -v "$__var" '%s' "${!__override}"; return; fi
+  local __default="${!__var:-${3:-}}" __val
+  if [[ -t 0 ]]; then
+    read -r -p "  $__prompt${__default:+ [$__default]}: " __val || true
+    printf -v "$__var" '%s' "${__val:-$__default}"
+  else
+    printf -v "$__var" '%s' "$__default"
+  fi
+}
+
+# Resolve a Slack email → user id via the bot token; pass through a bare U… id.
+resolve_slack_user() {
+  local token="$1" who="$2"
+  [[ -z "$who" ]] && { echo ""; return; }
+  if [[ "$who" != *@* ]]; then echo "$who"; return; fi
+  local resp
+  resp=$(curl -sS -G --data-urlencode "email=$who" \
+    -H "Authorization: Bearer $token" \
+    "https://slack.com/api/users.lookupByEmail" 2>/dev/null || true)
+  echo "$resp" | python3 -c 'import sys,json
+try:
+  d=json.load(sys.stdin); print(d.get("user",{}).get("id","") if d.get("ok") else "")
+except Exception:
+  print("")' 2>/dev/null || echo ""
+}
+
+# Rewrite the SLACK_* block in the GM's config.env (idempotent).
+write_slack_config() {
+  local tmp="$CONFIG_FILE.slacktmp"
+  # Strip any prior managed block (vars + our comment marker) so re-runs replace
+  # rather than accumulate.
+  grep -vE '^(export )?SLACK_(ENABLED|BOT_TOKEN|APP_TOKEN|NOTIFY_CHANNEL|ALLOWED_USERS|PROJECT_MAP)=|^# === Slack integration \(managed by' "$CONFIG_FILE" > "$tmp" || true
+  {
+    echo ""
+    echo "# === Slack integration (managed by 'setup.sh slack') ==="
+    echo "SLACK_ENABLED=\"true\""
+    echo "SLACK_BOT_TOKEN=\"$SLACK_BOT_TOKEN\""
+    echo "SLACK_APP_TOKEN=\"$SLACK_APP_TOKEN\""
+    echo "SLACK_NOTIFY_CHANNEL=\"$SLACK_NOTIFY_CHANNEL\""
+    echo "SLACK_ALLOWED_USERS=\"$SLACK_ALLOWED_USERS\""
+    echo "SLACK_PROJECT_MAP='$SLACK_PROJECT_MAP'"
+  } >> "$tmp"
+  mv "$tmp" "$CONFIG_FILE"
+  ok "wrote Slack config to $CONFIG_FILE"
+}
+
+setup_slack_wizard() {
+  echo ""
+  log "Slack setup wizard for $PROJECT_DISPLAY_NAME"
+  echo "  1. Create the app: https://api.slack.com/apps → Create New App →"
+  echo "     From an app manifest → paste modules/slack/manifest.yaml → Create."
+  echo "  2. Basic Information → App-Level Tokens → Generate (scope connections:write)"
+  echo "     → copy the xapp-… token. Then OAuth & Permissions → Install to Workspace"
+  echo "     → copy the Bot User OAuth Token xoxb-…."
+  echo "  (Leave the app token blank for outbound-only — pings, no inbound control.)"
+  echo ""
+
+  ask SLACK_BOT_TOKEN "Bot User OAuth Token (xoxb-…)"
+  ask SLACK_APP_TOKEN "App-Level Token (xapp-…, blank = outbound-only)"
+  ask SLACK_NOTIFY_CHANNEL "Channel for task pings" "#taskyou"
+  ask SLACK_OWNER "Your Slack email or member ID (to allow-list)"
+  ask SLACK_PROJECT_MAP "Channel→project map JSON (optional)" "{}"
+
+  if [[ -z "$SLACK_BOT_TOKEN" ]]; then
+    echo "Error: a bot token is required."
+    exit 1
+  fi
+
+  # Verify the bot token and resolve the allow-listed user.
+  local auth
+  auth=$(curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+    "https://slack.com/api/auth.test" 2>/dev/null || true)
+  if echo "$auth" | grep -q '"ok":true'; then
+    local team botname
+    team=$(echo "$auth" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("team",""))' 2>/dev/null || echo "")
+    botname=$(echo "$auth" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("user",""))' 2>/dev/null || echo "")
+    ok "bot @$botname authenticated in ${team:-workspace}"
+  else
+    warn "couldn't verify the bot token (auth.test). Continuing — fix it in $CONFIG_FILE if Slack errors."
+  fi
+
+  SLACK_ALLOWED_USERS=$(resolve_slack_user "$SLACK_BOT_TOKEN" "$SLACK_OWNER")
+  if [[ -z "$SLACK_ALLOWED_USERS" ]]; then
+    warn "couldn't resolve '$SLACK_OWNER' to a Slack user id — set SLACK_ALLOWED_USERS in $CONFIG_FILE before anyone can drive ty."
+  else
+    ok "allow-listed: $SLACK_ALLOWED_USERS"
+  fi
+
+  write_slack_config
+  export SLACK_ENABLED="true" SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_NOTIFY_CHANNEL \
+    SLACK_ALLOWED_USERS SLACK_PROJECT_MAP
+
+  # Install on whichever target this GM uses.
+  if is_local_server; then
+    export SERVER_HOME="${SERVER_HOME:-$HOME}"
+    setup_slack_local "$SERVER_HOME"
+  elif [[ "$EXE_DEV_ENABLED" == "true" && -n "$EXE_DEV_VM_NAME" ]]; then
+    setup_slack_remote "exedev@${EXE_DEV_VM_NAME}.exe.xyz" "/home/exedev"
+  else
+    setup_slack_remote "$SERVER_HOST" "$SERVER_HOME"
+  fi
+
+  echo ""
+  ok "Slack wired up. Final step: invite the bot in Slack →  /invite @<botname>  in $SLACK_NOTIFY_CHANNEL"
+  echo "  Then try:  @<botname> what's on the board?"
+}
+
 # ── Daemon systemd service ────────────────────────────────────────────────────
 
 install_daemon_service() {
@@ -717,31 +867,7 @@ setup_server_local() {
   # Slack module (local mode: render files + .env; no systemd on macOS, so the
   # operator starts it — directly or via a launchd agent).
   if [[ "$SLACK_ENABLED" == "true" ]]; then
-    log "Setting up Slack integration (local)"
-    local slack_dir="$home_dir/scripts/slack"
-    mkdir -p "$slack_dir"
-    cp "$MODULES_DIR/slack/slack-bridge.mjs" "$slack_dir/slack-bridge.mjs"
-    chmod +x "$slack_dir/slack-bridge.mjs"
-
-    local project_map_json="$SLACK_PROJECT_MAP"
-  [[ -z "$project_map_json" ]] && project_map_json="{}"
-    local default_project
-    default_project=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
-    cat > "$slack_dir/.env" <<EOF
-SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
-SLACK_APP_TOKEN=$SLACK_APP_TOKEN
-SLACK_NOTIFY_CHANNEL=$SLACK_NOTIFY_CHANNEL
-SLACK_ALLOWED_USERS=$SLACK_ALLOWED_USERS
-SLACK_PROJECT_MAP=$project_map_json
-DEFAULT_PROJECT=$default_project
-TY_PATH=$(command -v ty)
-NOTIFICATIONS_FILE=$home_dir/notifications.jsonl
-ANTHROPIC_API_KEY=$SLACK_ANTHROPIC_API_KEY
-ANTHROPIC_MODEL=$SLACK_CLASSIFIER_MODEL
-EOF
-    chmod 600 "$slack_dir/.env"
-    ok "slack-bridge installed: $slack_dir"
-    warn "Local mode: start it with 'node $slack_dir/slack-bridge.mjs' (or a launchd agent)."
+    setup_slack_local "$home_dir"
   fi
 
   log "Local server setup complete (daemon assumed running on this machine)"
@@ -1352,5 +1478,8 @@ case "$MODE" in
     setup_local
     setup_server
     print_checklist
+    ;;
+  slack)
+    setup_slack_wizard
     ;;
 esac
