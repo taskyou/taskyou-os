@@ -16,6 +16,15 @@ const POLL_INTERVAL_MS = 10_000; // 10 seconds
 
 // Track where we are in the notifications file
 let lastLineCount = 0;
+// Set once the startup poll has recorded its position. Until then we don't
+// emit — so we skip the pre-existing backlog on startup WITHOUT swallowing the
+// first live event (the empty-file cold-start case the old `lastLineCount > 0`
+// guard dropped).
+let initialized = false;
+// Guard against overlapping polls: a slow runRemote (up to its 30s timeout) can
+// outlast the 10s interval; without this, two polls share lastLineCount and can
+// double-deliver or skip events.
+let polling = false;
 
 const mcp = new Server(
   { name: "taskyou", version: "0.1.0" },
@@ -130,6 +139,8 @@ function runRemote(command: string): Promise<string> {
 // ── Notification polling ─────────────────────────────────────────────────────
 
 async function pollNotifications() {
+  if (polling) return; // a previous poll is still in flight — skip this tick
+  polling = true;
   try {
     // Get current line count
     const wcResult = await runRemote(
@@ -137,7 +148,7 @@ async function pollNotifications() {
     );
     const currentLines = parseInt(wcResult.trim(), 10) || 0;
 
-    if (currentLines > lastLineCount && lastLineCount > 0) {
+    if (initialized && currentLines > lastLineCount) {
       // Read only new lines
       const newLines = await runRemote(
         `tail -n +${lastLineCount + 1} ${SERVER_HOME}/notifications.jsonl`
@@ -168,10 +179,15 @@ async function pollNotifications() {
       }
     }
 
-    // On first run, just record the position (don't replay old events)
+    // Record position. On the first run this just skips the existing backlog;
+    // from here on, `initialized` lets new lines through (including the very
+    // first one written after startup).
     lastLineCount = currentLines;
+    initialized = true;
   } catch {
     // SSH failure — silently retry next interval
+  } finally {
+    polling = false;
   }
 }
 
