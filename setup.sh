@@ -166,6 +166,25 @@ remote_with_path() {
   remote "export PATH=$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:$SERVER_HOME/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && $*"
 }
 
+# Resolve the TaskYou hooks directory for a host's OS.
+# ty's hooks.DefaultHooksDir() follows Go's os.UserConfigDir():
+#   Linux  -> $HOME/.config/task/hooks
+#   macOS  -> $HOME/Library/Application Support/task/hooks
+# $1 = a command runner (e.g. "remote" or "exe_remote") that runs a shell
+#      command on the target host; $2 = that host's home directory.
+# Echoes the absolute hooks dir. Falls back to ~/.config on unknown OSes.
+resolve_hooks_dir() {
+  local runner="$1"
+  local home_dir="$2"
+  local os_name
+  os_name=$("$runner" "uname -s" 2>/dev/null | tr -d '\r' | xargs || echo "")
+  if [[ "$os_name" == "Darwin" ]]; then
+    echo "$home_dir/Library/Application Support/task/hooks"
+  else
+    echo "$home_dir/.config/task/hooks"
+  fi
+}
+
 # ── Parse args ───────────────────────────────────────────────────────────────
 
 if [[ $# -lt 2 ]]; then
@@ -534,9 +553,103 @@ install_daemon_service() {
   fi
 }
 
+# ── Local-server setup (server = this machine) ───────────────────────────────
+
+# True when the "server" is the same box the GM runs on (no SSH, no systemd).
+# Detected from SERVER_HOST being local/localhost/empty — mirrors the channel's
+# IS_LOCAL detection so a single config drives both.
+is_local_server() {
+  [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_HOST" ]]
+}
+
+# Provision when the daemon runs on this same machine: install hooks + the
+# notifications file locally, skipping SSH provisioning and the systemd service
+# (the GM and daemon share the box). TaskYou itself is assumed already installed
+# locally (this is the machine the GM launches from). Cross-platform hooks dir.
+setup_server_local() {
+  log "Setting up local server (this machine — no SSH, no systemd)"
+
+  # Preflight: local mode assumes ty is installed and its daemon runs on THIS
+  # box (we register projects + install hooks locally). Without these, setup
+  # would "succeed" but no task events would ever fire — fail loudly instead.
+  if ! command -v ty >/dev/null 2>&1; then
+    echo "Error: 'ty' is not on PATH, but SERVER_HOST is local."
+    echo "Install TaskYou first (the daemon must run on this machine), then re-run."
+    exit 1
+  fi
+  if ty daemon status >/dev/null 2>&1 || pgrep -f 'ty daemon' >/dev/null 2>&1; then
+    ok "ty daemon detected"
+  else
+    warn "ty daemon does not appear to be running on this machine."
+    warn "Start it (e.g. 'ty daemon') so task hooks fire and the channel sees events."
+  fi
+
+  local home_dir="${SERVER_HOME:-$HOME}"
+  # Ensure templates that reference {{SERVER_HOME}} (e.g. the hooks' notifications
+  # path) render against the resolved local home even if SERVER_HOME was blank.
+  export SERVER_HOME="$home_dir"
+
+  # Git identity
+  log "Configuring git identity"
+  git config --global user.name "$GIT_NAME" && git config --global user.email "$GIT_EMAIL"
+  ok "git: $GIT_NAME <$GIT_EMAIL>"
+
+  # Create project repos and register them with TaskYou
+  log "Creating project repositories"
+  IFS=',' read -ra projs <<< "$PROJECTS"
+  for proj in "${projs[@]}"; do
+    proj=$(echo "$proj" | xargs)
+    local repo_path="$home_dir/projects/$proj"
+    if [[ -d "$repo_path/.git" ]]; then
+      ok "$proj (already exists)"
+    else
+      mkdir -p "$repo_path" && (cd "$repo_path" && git init -q)
+      ok "$proj"
+    fi
+
+    if ty projects show "$proj" >/dev/null 2>&1; then
+      ok "  ty project $proj (already registered)"
+    else
+      ty projects create "$proj" --path "$repo_path"
+      ok "  ty project $proj registered"
+    fi
+  done
+
+  # Install TaskYou hooks (OS-detected dir; matches ty's os.UserConfigDir()).
+  log "Installing TaskYou hooks"
+  local hooks_dir
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    hooks_dir="$home_dir/Library/Application Support/task/hooks"
+  else
+    hooks_dir="$home_dir/.config/task/hooks"
+  fi
+  mkdir -p "$hooks_dir"
+  ok "hooks dir: $hooks_dir"
+
+  for hook_tmpl in "$TEMPLATES_DIR"/hooks/*.tmpl; do
+    local hook_name
+    hook_name=$(basename "$hook_tmpl" .tmpl)
+    render_file "$hook_tmpl" "$hooks_dir/$hook_name"
+    chmod +x "$hooks_dir/$hook_name"
+    ok "hook: $hook_name"
+  done
+
+  # Notifications file
+  touch "$home_dir/notifications.jsonl"
+  ok "notifications.jsonl"
+
+  log "Local server setup complete (daemon assumed running on this machine)"
+}
+
 # ── Server setup ─────────────────────────────────────────────────────────────
 
 setup_server() {
+  # Local-server mode: skip all SSH/systemd provisioning.
+  if is_local_server; then
+    setup_server_local
+    return
+  fi
+
   log "Setting up server: $SERVER_HOST"
 
   # Test SSH connection
@@ -615,15 +728,19 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
 
   # Install TaskYou hooks
   log "Installing TaskYou hooks"
-  local hooks_dir="$SERVER_HOME/.config/task/hooks"
-  remote "mkdir -p $hooks_dir"
+  # OS-detect the hooks dir: Linux uses ~/.config, macOS uses
+  # ~/Library/Application Support (matches ty's os.UserConfigDir()).
+  local hooks_dir
+  hooks_dir=$(resolve_hooks_dir remote "$SERVER_HOME")
+  remote "mkdir -p \"$hooks_dir\""
+  ok "hooks dir: $hooks_dir"
 
   for hook_tmpl in "$TEMPLATES_DIR"/hooks/*.tmpl; do
     local hook_name
     hook_name=$(basename "$hook_tmpl" .tmpl)
     local rendered
     rendered=$(render "$(<"$hook_tmpl")")
-    ssh "$SERVER_HOST" "cat > $hooks_dir/$hook_name && chmod +x $hooks_dir/$hook_name" <<< "$rendered"
+    ssh "$SERVER_HOST" "cat > \"$hooks_dir/$hook_name\" && chmod +x \"$hooks_dir/$hook_name\"" <<< "$rendered"
     ok "hook: $hook_name"
   done
 
@@ -862,15 +979,19 @@ with open(cf, 'w') as f: json.dump(data, f, indent=2)
 
   # Install TaskYou hooks
   log "Installing TaskYou hooks"
-  local hooks_dir="$EXE_HOME/.config/task/hooks"
-  exe_remote "mkdir -p $hooks_dir"
+  # OS-detect the hooks dir (exe.dev VMs are Linux -> ~/.config, but resolve
+  # dynamically so a macOS target would get ~/Library/Application Support).
+  local hooks_dir
+  hooks_dir=$(resolve_hooks_dir exe_remote "$EXE_HOME")
+  exe_remote "mkdir -p \"$hooks_dir\""
+  ok "hooks dir: $hooks_dir"
 
   for hook_tmpl in "$TEMPLATES_DIR"/hooks/*.tmpl; do
     local hook_name
     hook_name=$(basename "$hook_tmpl" .tmpl)
     local rendered
     rendered=$(render "$(<"$hook_tmpl")")
-    ssh "$EXE_HOST" "cat > $hooks_dir/$hook_name && chmod +x $hooks_dir/$hook_name" <<< "$rendered"
+    ssh "$EXE_HOST" "cat > \"$hooks_dir/$hook_name\" && chmod +x \"$hooks_dir/$hook_name\"" <<< "$rendered"
     ok "hook: $hook_name"
   done
 

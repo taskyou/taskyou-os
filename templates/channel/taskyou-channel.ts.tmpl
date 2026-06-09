@@ -104,15 +104,40 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   throw new Error(`unknown tool: ${name}`);
 });
 
-// ── SSH helper ───────────────────────────────────────────────────────────────
+// ── Command runner (local or SSH) ────────────────────────────────────────────
+
+// When the GM runs on the same machine as the TaskYou daemon, SERVER_HOST is
+// "local"/"localhost"/"" — run commands directly via a login shell instead of
+// over SSH. Otherwise keep the original remote-Linux SSH behavior unchanged.
+const IS_LOCAL =
+  SERVER_HOST === "local" ||
+  SERVER_HOST === "localhost" ||
+  SERVER_HOST === "";
 
 function runRemote(command: string): Promise<string> {
   return new Promise((resolve) => {
-    const sshCmd = `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && export PATH="${SERVER_HOME}/.local/bin:${SERVER_HOME}/bin:${SERVER_HOME}/.npm-global/bin:$PATH" && cd ${SERVER_HOME} && ${command}`;
+    let proc;
 
-    const proc = spawn("ssh", [SERVER_HOST, sshCmd], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    if (IS_LOCAL) {
+      // LOCAL mode: run on this machine via a login shell, no SSH. $HOME
+      // expands inside bash; we prepend ~/.local/bin and cd into SERVER_HOME
+      // (where notifications.jsonl lives) just like the remote path does.
+      proc = spawn(
+        "bash",
+        [
+          "-lc",
+          `export PATH="$HOME/.local/bin:$HOME/bin:$PATH" && cd "${SERVER_HOME}" && ${command}`,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] }
+      );
+    } else {
+      // Remote mode: run over SSH (original behavior — do not change).
+      const sshCmd = `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && export PATH="${SERVER_HOME}/.local/bin:${SERVER_HOME}/bin:${SERVER_HOME}/.npm-global/bin:$PATH" && cd ${SERVER_HOME} && ${command}`;
+
+      proc = spawn("ssh", [SERVER_HOST, sshCmd], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
 
     let stdout = "";
     let stderr = "";
@@ -185,7 +210,7 @@ async function pollNotifications() {
     lastLineCount = currentLines;
     initialized = true;
   } catch {
-    // SSH failure — silently retry next interval
+    // Command failure (SSH or local) — silently retry next interval
   } finally {
     polling = false;
   }
