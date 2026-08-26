@@ -224,6 +224,25 @@ export function formatNotification(event) {
   const title = event.title || "";
   const project = event.project ? ` _(${event.project})_` : "";
   switch (event.event) {
+    // ── Claude auth health ───────────────────────────────────────────────────
+    // Emitted by claude-auth-monitor.sh, not by a task hook, so these carry no
+    // task_id — they describe the server's own Claude login. With no task_id
+    // they always land in SLACK_NOTIFY_CHANNEL rather than a task thread.
+    case "auth_failed":
+      return (
+        `:rotating_light: *Claude login expired — agents cannot run*${project}\n` +
+        `${title || "The Claude Code login on the agent server has expired."}\n` +
+        `Tasks will still be created, but nothing will execute until it's renewed.`
+      );
+    case "auth_expiring": {
+      const days = Number.isFinite(event.days_remaining)
+        ? ` (${event.days_remaining} day${event.days_remaining === 1 ? "" : "s"} left)`
+        : "";
+      return (
+        `:hourglass: *Claude login expires soon*${days}${project}\n` +
+        `${title || "Renew the Claude Code login on the agent server."}`
+      );
+    }
     case "completed":
       return `:white_check_mark: *Task #${id} completed*: ${title}${project}`;
     case "blocked":

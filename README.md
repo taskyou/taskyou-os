@@ -155,6 +155,61 @@ These are configured via flags in `config.env` during setup. They're part of the
 - **Cloudflare R2** (`R2_ENABLED=true`) — Public URLs for files and assets agents generate
 - **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories
 
+## Claude Auth Expiry
+
+Agent servers authenticate Claude Code per-Unix-user with `claude /login`
+(claude.ai OAuth against a Max subscription). **That login expires roughly every
+30 days.** When it lapses, every agent task fails or stalls, and the only symptom
+is that no work happens.
+
+`setup.sh` installs `claude-auth-monitor.sh` plus a cron entry that runs it every
+30 minutes. On failure it writes `~/scripts/.auth-failed` — the flag
+`modules/linear/linear-poll.mjs` already checks before executing tasks — and
+appends an `auth_failed` event to `~/notifications.jsonl`, which the Slack bridge
+already tails. It also warns with `auth_expiring` when fewer than 5 days remain.
+Alerts are rate-limited (failures re-alert every 6h, warnings every 24h) so a
+30-minute cron can't storm Slack. Every path it writes lives under the user's own
+`$HOME`, never a shared `/tmp` — several GMs can share one box.
+
+**Do not use `claude auth status` to check this.** It reads cached local config
+and never contacts Anthropic. On credentials that had been dead for 95 days it
+still returned, with exit 0:
+
+```json
+{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "max"}
+```
+
+`claude doctor`, `claude mcp list` and `claude auth status --text` are equally
+offline and equally wrong. The only truthful check is a real model request:
+
+```bash
+claude -p "hi" --model haiku --max-turns 1 </dev/null >/dev/null 2>&1
+```
+
+Exit 0 means healthy; exit 1 on an expired login, with "Failed to authenticate:
+OAuth session expired and could not be refreshed". It costs about 40 tokens, so
+the monitor gates it behind a free offline read of
+`~/.claude/.credentials.json` → `claudeAiOauth.refreshTokenExpiresAt`. The access
+token lasts ~8h and self-refreshes; the refresh token is the real ~30-day sliding
+clock. A `claudeAiOauth` block with no `refreshTokenExpiresAt` predates Claude
+Code 2.1.x and is certainly dead. No `claudeAiOauth` block at all is *unknown*,
+not dead — the credential may be in an OS keyring — so the probe decides.
+
+Run `/doctor` at any time to see days remaining, probe the login for real, and
+install the monitor on a GM that predates it.
+
+### Fixing an expired login
+
+```bash
+ssh <SERVER_HOST>
+claude /login
+```
+
+**Alternative for boxes that don't use connectors:** `claude setup-token` issues
+a token valid for a year, which removes the monthly chore. It disables claude.ai
+MCP connectors and Remote Control for that user, so it is not a universal fix and
+is not the default — use it only where those features aren't needed.
+
 ## Manual Setup
 
 If you prefer to skip the interactive `/launch` wizard:

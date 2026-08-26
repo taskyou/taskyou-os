@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# TaskYou-OS Claude Auth Monitor
+# Deployed to: {{SERVER_HOME}}/.local/bin/claude-auth-monitor.sh
+# Run from cron (default: every 30 minutes).
+#
+# WHY THIS EXISTS
+# ---------------
+# Agent servers authenticate Claude Code per-Unix-user with `claude /login`
+# (claude.ai OAuth against a Max subscription). That login expires roughly every
+# 30 days. When it does, every agent task fails or stalls, and the only symptom
+# is that no work happens. There was no detection at all.
+#
+# WHY `claude auth status` IS NOT THE CHECK
+# -----------------------------------------
+# `claude auth status` reads cached local config and never contacts Anthropic.
+# On credentials that had been dead for 95 days it still reported, with exit 0:
+#
+#     {"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "max"}
+#
+# `claude doctor`, `claude mcp list` and `claude auth status --text` are all
+# equally offline and equally wrong. The ONLY truthful probe is a real model
+# request, which is what this script does.
+#
+# HOW IT WORKS
+# ------------
+#   1. Free offline pre-check of ~/.claude/.credentials.json. Access tokens last
+#      ~8h and self-refresh; the refresh token is the real clock (~30 days,
+#      sliding), so `claudeAiOauth.refreshTokenExpiresAt` (epoch ms) is what we
+#      read. If a `claudeAiOauth` block exists but has no refreshTokenExpiresAt,
+#      the credential predates Claude Code 2.1.x and is certainly dead.
+#      If there is no `claudeAiOauth` block at all, the credentials live
+#      somewhere this check cannot see (e.g. the macOS Keychain) — that is
+#      "unknown", NOT "dead", and we fall through to the probe.
+#   2. If the offline check already proves the credential is dead, we skip the
+#      probe entirely and save the tokens.
+#   3. Otherwise run one real request: `claude -p "hi" --model haiku
+#      --max-turns 1`. Exit 0 = healthy (~3-6s, ~40 tokens). Exit 1 on expired
+#      auth with "Failed to authenticate: OAuth session expired and could not be
+#      refreshed".
+#   4. Healthy   -> remove the .auth-failed flag; if the refresh token expires
+#                   within WARN_DAYS, append an `auth_expiring` event.
+#      Unhealthy -> touch .auth-failed and append an `auth_failed` event.
+#
+# The .auth-failed flag is the one modules/linear/linear-poll.mjs already looks
+# for (it degrades to "create tasks but don't execute them" when present).
+# Nothing used to write it. This script does.
+#
+# Events are appended to ~/notifications.jsonl, which the Slack bridge already
+# tails — so alerts reach Slack with no extra plumbing.
+#
+# Alerts are rate-limited so a 30-minute cron cannot storm Slack: a failure
+# re-alerts at most every 6h, an expiry warning at most every 24h.
+#
+# Idempotent and safe to run concurrently-ish from cron: every write is a single
+# append or an atomic-enough touch/rm.
+
+set -uo pipefail
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+# MULTI-TENANCY: several GMs can share one box. Every log/flag/state path must
+# live under this user's own $HOME — never a shared /tmp path. A /tmp file owned
+# by another user is exactly how a daemon start got broken in production.
+HOME_DIR="{{SERVER_HOME}}"
+if [[ -z "$HOME_DIR" || ! -w "$HOME_DIR" ]]; then
+  HOME_DIR="$HOME"
+fi
+
+PROJECT_NAME="{{PROJECT_NAME}}"
+
+# Must match linear-poll.mjs, which resolves its flag as join(__dirname,
+# '.auth-failed') and is deployed to $HOME/scripts/linear-poll.mjs.
+STATE_DIR="$HOME_DIR/scripts"
+FLAG_FILE="$STATE_DIR/.auth-failed"
+STATE_FILE="$STATE_DIR/.auth-monitor-state"
+LOG_FILE="$STATE_DIR/claude-auth-monitor.log"
+NOTIFICATIONS_FILE="$HOME_DIR/notifications.jsonl"
+CREDENTIALS_FILE="$HOME_DIR/.claude/.credentials.json"
+
+# ── Tunables (override via the environment) ──────────────────────────────────
+WARN_DAYS="${CLAUDE_AUTH_WARN_DAYS:-5}"
+FAIL_REALERT_SECONDS="${CLAUDE_AUTH_FAIL_REALERT_SECONDS:-21600}"      # 6h
+EXPIRING_REALERT_SECONDS="${CLAUDE_AUTH_EXPIRING_REALERT_SECONDS:-86400}" # 24h
+PROBE_TIMEOUT="${CLAUDE_AUTH_PROBE_TIMEOUT:-120}"
+CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+now_epoch() { date +%s; }
+iso_now() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+
+log_line() {
+  printf '%s %s\n' "$(iso_now)" "$1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# last_alert <key> -> epoch seconds of the last alert with this key (0 if never)
+last_alert() {
+  local key="$1"
+  [[ -f "$STATE_FILE" ]] || { echo 0; return; }
+  local v
+  v=$(grep -E "^${key}=" "$STATE_FILE" 2>/dev/null | tail -1 | cut -d= -f2)
+  [[ "$v" =~ ^[0-9]+$ ]] && echo "$v" || echo 0
+}
+
+# record_alert <key>
+record_alert() {
+  local key="$1" tmp
+  tmp="${STATE_FILE}.$$"
+  { [[ -f "$STATE_FILE" ]] && grep -vE "^${key}=" "$STATE_FILE" 2>/dev/null; true; } > "$tmp"
+  printf '%s=%s\n' "$key" "$(now_epoch)" >> "$tmp"
+  mv -f "$tmp" "$STATE_FILE" 2>/dev/null || rm -f "$tmp"
+}
+
+# should_alert <key> <min_interval_seconds>
+should_alert() {
+  local key="$1" interval="$2" last
+  last=$(last_alert "$key")
+  (( $(now_epoch) - last >= interval ))
+}
+
+# notify <event> <title> [days_remaining]
+# Appends one JSON line to notifications.jsonl. Shape matches the task hooks
+# (event/title/project/timestamp) so the Slack bridge can render it unchanged;
+# `days_remaining` and `host` are the auth-specific extras.
+notify() {
+  local event="$1" title="$2" days="${3:-}"
+  local json
+  json=$(EV="$event" TITLE="$title" PROJ="$PROJECT_NAME" DAYS="$days" \
+         HOSTNAME_="$(hostname 2>/dev/null || echo unknown)" \
+         USER_="$(whoami 2>/dev/null || echo unknown)" \
+         TS="$(iso_now)" python3 -c '
+import json, os
+ev = {
+    "event": os.environ["EV"],
+    "title": os.environ["TITLE"],
+    "project": os.environ["PROJ"],
+    "host": os.environ["HOSTNAME_"],
+    "user": os.environ["USER_"],
+    "timestamp": os.environ["TS"],
+}
+d = os.environ.get("DAYS", "")
+if d != "":
+    ev["days_remaining"] = int(d)
+print(json.dumps(ev))
+') || return 1
+  printf '%s\n' "$json" >> "$NOTIFICATIONS_FILE" 2>/dev/null || true
+  log_line "notify: $json"
+}
+
+# ── Step 1: free offline pre-check ───────────────────────────────────────────
+# Prints one of:
+#   ok <days_until_refresh_token_expiry>
+#   expired <reason>
+#   unknown <reason>
+
+credentials_state() {
+  if [[ ! -f "$CREDENTIALS_FILE" ]]; then
+    echo "unknown no-credentials-file"
+    return
+  fi
+  CRED_FILE="$CREDENTIALS_FILE" python3 -c '
+import json, os, sys, time
+
+path = os.environ["CRED_FILE"]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception as e:
+    print("unknown unreadable-credentials-file")
+    sys.exit(0)
+
+oauth = data.get("claudeAiOauth")
+if not isinstance(oauth, dict) or not oauth:
+    # No claude.ai OAuth block in this file. The credential may live in the
+    # OS keyring (macOS) or the box may use a long-lived setup-token. We
+    # cannot judge it offline, so let the live probe decide.
+    print("unknown no-claudeAiOauth-block")
+    sys.exit(0)
+
+exp = oauth.get("refreshTokenExpiresAt")
+if exp is None:
+    # Pre-2.1.x credential format. These have no sliding refresh token and are
+    # certainly dead.
+    print("expired no-refreshTokenExpiresAt-field")
+    sys.exit(0)
+
+try:
+    exp_s = float(exp) / 1000.0
+except (TypeError, ValueError):
+    print("unknown bad-refreshTokenExpiresAt")
+    sys.exit(0)
+
+remaining = exp_s - time.time()
+if remaining <= 0:
+    print("expired refresh-token-expired")
+else:
+    print("ok %d" % int(remaining // 86400))
+' 2>/dev/null || echo "unknown python-check-failed"
+}
+
+# ── Step 2: the only truthful probe ──────────────────────────────────────────
+# One real model request. ~40 tokens. Gated behind the free check above so we
+# never spend tokens proving something we already know.
+
+run_probe() {
+  if ! command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
+    log_line "probe: SKIPPED — '$CLAUDE_BIN' not on PATH"
+    return 2
+  fi
+  local out rc
+  if command -v timeout >/dev/null 2>&1; then
+    out=$(cd "$HOME_DIR" && timeout "$PROBE_TIMEOUT" \
+      "$CLAUDE_BIN" -p "hi" --model haiku --max-turns 1 </dev/null 2>&1 >/dev/null)
+    rc=$?
+  else
+    out=$(cd "$HOME_DIR" && \
+      "$CLAUDE_BIN" -p "hi" --model haiku --max-turns 1 </dev/null 2>&1 >/dev/null)
+    rc=$?
+  fi
+  PROBE_OUTPUT=$(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)
+  return $rc
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+PROBE_OUTPUT=""
+read -r cred_state cred_detail <<< "$(credentials_state)"
+cred_detail="${cred_detail:-}"
+log_line "credentials: $cred_state $cred_detail"
+
+days_left=""
+if [[ "$cred_state" == "ok" ]]; then
+  days_left="$cred_detail"
+fi
+
+healthy=false
+reason=""
+
+if [[ "$cred_state" == "expired" ]]; then
+  # Proven dead offline — do not spend tokens on a probe.
+  healthy=false
+  reason="credentials file says the refresh token is expired ($cred_detail)"
+  log_line "probe: SKIPPED — credentials already proven expired"
+else
+  if run_probe; then
+    healthy=true
+  else
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+      # claude binary missing — not an auth failure. Warn in the log and stop
+      # rather than raising a false auth alarm.
+      log_line "exit: claude binary not found; no alert raised"
+      exit 0
+    fi
+    healthy=false
+    reason="live probe failed (exit $rc): ${PROBE_OUTPUT:-no output}"
+  fi
+fi
+
+if $healthy; then
+  if [[ -f "$FLAG_FILE" ]]; then
+    rm -f "$FLAG_FILE"
+    log_line "recovered: removed $FLAG_FILE"
+    # Clear the failure cooldown so the next real failure alerts immediately.
+    record_alert "auth_failed_cleared"
+    if [[ -f "$STATE_FILE" ]]; then
+      grep -vE '^auth_failed=' "$STATE_FILE" > "${STATE_FILE}.$$" 2>/dev/null && \
+        mv -f "${STATE_FILE}.$$" "$STATE_FILE" || rm -f "${STATE_FILE}.$$"
+    fi
+  fi
+
+  if [[ -n "$days_left" && "$days_left" =~ ^[0-9]+$ && "$days_left" -le "$WARN_DAYS" ]]; then
+    if should_alert "auth_expiring" "$EXPIRING_REALERT_SECONDS"; then
+      notify "auth_expiring" \
+        "Claude login on $(hostname 2>/dev/null || echo this server) expires in ${days_left} day(s). Run 'claude /login' as $(whoami) before it lapses." \
+        "$days_left"
+      record_alert "auth_expiring"
+    else
+      log_line "auth_expiring suppressed (cooldown), ${days_left}d left"
+    fi
+  fi
+  log_line "healthy${days_left:+ (${days_left}d until refresh token expiry)}"
+  exit 0
+fi
+
+# Unhealthy.
+touch "$FLAG_FILE" 2>/dev/null || true
+log_line "UNHEALTHY: $reason"
+
+if should_alert "auth_failed" "$FAIL_REALERT_SECONDS"; then
+  notify "auth_failed" \
+    "Claude login on $(hostname 2>/dev/null || echo this server) has expired — agents cannot run. SSH in as $(whoami) and run 'claude /login'. ($reason)"
+  record_alert "auth_failed"
+else
+  log_line "auth_failed suppressed (cooldown)"
+fi
+
+exit 1

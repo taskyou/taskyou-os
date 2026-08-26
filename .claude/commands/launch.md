@@ -210,29 +210,43 @@ ssh <HOST> 'mkdir -p ~/.claude && test -f ~/.claude/settings.json || echo "{\"sk
 
 ### Connecting your Claude account
 
-Check if Claude is already authenticated on the server:
-```bash
-ssh <HOST> 'claude auth status 2>&1'
-```
+**Never trust `claude auth status` as proof of working auth.** It reads cached
+local config and never contacts Anthropic, so on credentials that have been dead
+for months it still prints `{"loggedIn": true, "authMethod": "claude.ai",
+"subscriptionType": "max"}` and exits 0. `claude doctor`, `claude mcp list` and
+`claude auth status --text` are equally offline and equally wrong. The only
+truthful check is a real model request.
 
-If Claude isn't logged in, copy the user's local credentials to the server automatically:
+Check whether Claude actually works on the server:
+```bash
+ssh <HOST> 'claude -p "hi" --model haiku --max-turns 1 </dev/null >/dev/null 2>&1 && echo AUTH_OK || echo AUTH_FAILED'
+```
+This costs about 40 tokens and takes a few seconds. Exit 0 (`AUTH_OK`) means the
+login genuinely works; on an expired login it exits 1 with "Failed to
+authenticate: OAuth session expired and could not be refreshed".
+
+If it prints `AUTH_FAILED`, copy the user's local credentials to the server:
 ```bash
 ssh <HOST> 'mkdir -p ~/.claude'
 scp ~/.claude/.credentials.json <HOST>:~/.claude/.credentials.json
 ```
 
-Then verify it worked:
+Then re-run the same probe to verify it actually worked:
 ```bash
-ssh <HOST> 'claude auth status 2>&1'
+ssh <HOST> 'claude -p "hi" --model haiku --max-turns 1 </dev/null >/dev/null 2>&1 && echo AUTH_OK || echo AUTH_FAILED'
 ```
 
-If the transfer worked (shows `loggedIn: true`), tell the user: "I've connected your agents to your Claude account — they'll use the same subscription you use on your Mac."
+If it now prints `AUTH_OK`, tell the user: "I've connected your agents to your Claude account — they'll use the same subscription you use on your Mac."
 
-If the local credentials file doesn't exist (`~/.claude/.credentials.json`), the user isn't logged in locally either. In that case, explain: "I need you to log into your Claude account on the server. This connects the agents to your subscription so they can do their work." Give them:
+If the local credentials file doesn't exist (`~/.claude/.credentials.json`), the user isn't logged in locally either — or, on a Mac, their credentials live in the Keychain rather than that file, so there is nothing to copy. In that case, explain: "I need you to log into your Claude account on the server. This connects the agents to your subscription so they can do their work." Give them:
 ```
 ssh <SERVER_HOSTNAME>
-claude login
+claude /login
 ```
+
+Once auth works, mention that this login expires roughly every 30 days, that
+`setup.sh` installs a monitor which checks it every 30 minutes and alerts before
+it lapses, and that `/doctor` will report exactly how many days are left.
 
 ### Connecting GitHub (only if GitHub was chosen)
 ```bash
