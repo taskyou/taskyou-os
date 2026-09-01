@@ -431,6 +431,49 @@ ssh -o ConnectTimeout=5 "$SERVER_HOST" '$HOME/.local/bin/audit.sh' 2>/dev/null
 
 ---
 
+### Check 9: GitHub API Budget
+
+GitHub bills REST and GraphQL from separate buckets (5,000 req/hr vs 5,000 pts/hr),
+and the bucket is **per user, not per token** — every box that authenticates as the
+same GitHub user shares one budget. A single runaway poller takes all of them down.
+
+**`gh api rate_limit` lies about GraphQL.** It has been observed reporting
+`graphql: 5000/5000` while a real query returned "API rate limit already exceeded".
+Never report the GraphQL number without probing.
+
+**Steps:**
+
+1. REST budget (this number is trustworthy):
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'gh api rate_limit --jq "\(.resources.core.remaining)/\(.resources.core.limit)"' 2>/dev/null
+```
+
+2. GraphQL budget — probe with a real query, and believe the probe over the counter:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'gh api graphql -f query="query{viewer{login}}" >/dev/null 2>&1 && echo "GRAPHQL_OK" || echo "GRAPHQL_EXHAUSTED_OR_ERROR"' 2>/dev/null
+```
+
+3. Check the pollers are not running hotter than the `*/10` floor, and that their
+   logs are being rotated:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'crontab -l 2>/dev/null | grep -E "poll|agent" ; du -sh $HOME/scripts/*.log 2>/dev/null' 2>/dev/null
+```
+
+**Report:**
+- Both buckets healthy, crons at `*/10` or slower, logs under ~10MB → PASS.
+- GraphQL probe fails → **FAIL**: "GraphQL budget exhausted (the reported counter says
+  otherwise — do not trust it)." Find the culprit: a poller requesting `mergeable` in a
+  list query, or a cron tighter than `*/10`. Pollers that hold PR-conflict scans should
+  be using `modules/github/pr-conflict-scan.mjs`, which checks mergeability only for PRs
+  that have a TaskYou task and caps that at 25 per scan.
+- REST remaining low (< 500), a cron tighter than `*/10`, or a log over 100MB → WARN,
+  with the offending cron line or log path. Deploy `modules/common/rotate-log.sh` and
+  re-run setup.sh to rewrite the cron line.
+
+**If SSH connection fails:** Report FAIL with "Could not connect to server."
+
+---
+
 ## Summary
 
 After all checks, present a summary table:
@@ -446,6 +489,7 @@ TaskYou-OS Doctor
   GM templates          PASS/WARN/FAIL
   Task event channel    PASS/WARN/FAIL
   Security audit        PASS/WARN/FAIL
+  GitHub API budget     PASS/WARN/FAIL
 ─────────────────────────────────
 ```
 

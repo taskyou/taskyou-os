@@ -153,7 +153,7 @@ These are configured via flags in `config.env` during setup. They're part of the
 - **Linear** (`LINEAR_ENABLED=true`) — Agent-to-human handoff via Linear issues, plus `@agent` comments for revisions
 - **Slack** (`SLACK_ENABLED=true`) — Manage TaskYou from Slack: task events pushed to Slack, `@mentions`/DMs drive `ty` ([details](modules/slack/README.md))
 - **Cloudflare R2** (`R2_ENABLED=true`) — Public URLs for files and assets agents generate
-- **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories
+- **GitHub** (`GITHUB_REPOS=workspace:org/repo`) — Push agent work to your repositories, plus budget-aware polling helpers: PR conflict scans scoped to PRs that have a TaskYou task, with a REST fallback for when the shared GraphQL budget is exhausted ([details](modules/github/README.md))
 
 ## Manual Setup
 

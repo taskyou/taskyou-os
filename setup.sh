@@ -860,7 +860,8 @@ EOF
     local scripts_dir="$SERVER_HOME/scripts"
     remote "mkdir -p $scripts_dir"
     scp -q "$MODULES_DIR/linear/linear-poll.mjs" "$SERVER_HOST:$scripts_dir/linear-poll.mjs"
-    remote "chmod +x $scripts_dir/linear-poll.mjs"
+    scp -q "$MODULES_DIR/common/rotate-log.sh" "$SERVER_HOST:$scripts_dir/rotate-log.sh"
+    remote "chmod +x $scripts_dir/linear-poll.mjs $scripts_dir/rotate-log.sh"
 
     # Create .env for poll script
     local label_map_json="{"
@@ -883,12 +884,17 @@ EOF
     ok "Linear poll script installed"
 
     # Set up cron job
-    local cron_line="*/2 * * * * export PATH=$SERVER_HOME/.npm-global/bin:$SERVER_HOME/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH && node $scripts_dir/linear-poll.mjs >> $scripts_dir/linear-poll.log 2>&1"
-    if remote "crontab -l 2>/dev/null" | grep -q "linear-poll.mjs"; then
-      ok "Cron job already exists"
+    # */10 is the floor for pollers: anything tighter multiplies API spend
+    # across every box that shares the same GitHub/Linear user. rotate-log.sh
+    # runs first so an error-looping poller cannot grow a 178MB log.
+    local cron_line="*/10 * * * * export PATH=$SERVER_HOME/.npm-global/bin:$SERVER_HOME/.local/bin:/home/deploy/.asdf/installs/nodejs/24.13.0/bin:\$PATH; $scripts_dir/rotate-log.sh $scripts_dir/linear-poll.log; node $scripts_dir/linear-poll.mjs >> $scripts_dir/linear-poll.log 2>&1"
+    # Rewrite rather than skip: boxes provisioned before the */10 floor still
+    # carry a */2 line, and leaving it in place is how the budget got burned.
+    if remote "crontab -l 2>/dev/null" | grep -qF "$cron_line"; then
+      ok "Cron job already up to date"
     else
-      remote "(crontab -l 2>/dev/null; echo '$cron_line') | crontab -"
-      ok "Cron job installed (every 2 minutes)"
+      remote "(crontab -l 2>/dev/null | grep -v 'linear-poll.mjs'; echo '$cron_line') | crontab -"
+      ok "Cron job installed (every 10 minutes)"
     fi
   fi
 
@@ -1188,7 +1194,8 @@ EOF
     local scripts_dir="$EXE_HOME/scripts"
     exe_remote "mkdir -p $scripts_dir"
     scp -q "$MODULES_DIR/linear/linear-poll.mjs" "$EXE_HOST:$scripts_dir/linear-poll.mjs"
-    exe_remote "chmod +x $scripts_dir/linear-poll.mjs"
+    scp -q "$MODULES_DIR/common/rotate-log.sh" "$EXE_HOST:$scripts_dir/rotate-log.sh"
+    exe_remote "chmod +x $scripts_dir/linear-poll.mjs $scripts_dir/rotate-log.sh"
 
     local label_map_json="{"
     IFS=',' read -ra projs <<< "$PROJECTS"
@@ -1209,12 +1216,13 @@ DEFAULT_PROJECT=$(echo "$PROJECTS" | cut -d',' -f1 | xargs)
 EOF
     ok "Linear poll script installed"
 
-    local cron_line_linear="*/2 * * * * export PATH=$EXE_HOME/.local/bin:$EXE_HOME/bin:\$PATH && node $scripts_dir/linear-poll.mjs >> $scripts_dir/linear-poll.log 2>&1"
-    if exe_remote "crontab -l 2>/dev/null" | grep -q "linear-poll.mjs"; then
-      ok "Linear cron job already exists"
+    # See the note on the server cron line: */10 floor + rotate before each run.
+    local cron_line_linear="*/10 * * * * export PATH=$EXE_HOME/.local/bin:$EXE_HOME/bin:\$PATH; $scripts_dir/rotate-log.sh $scripts_dir/linear-poll.log; node $scripts_dir/linear-poll.mjs >> $scripts_dir/linear-poll.log 2>&1"
+    if exe_remote "crontab -l 2>/dev/null" | grep -qF "$cron_line_linear"; then
+      ok "Linear cron job already up to date"
     else
-      exe_remote "(crontab -l 2>/dev/null; echo '$cron_line_linear') | crontab -"
-      ok "Linear cron job installed"
+      exe_remote "(crontab -l 2>/dev/null | grep -v 'linear-poll.mjs'; echo '$cron_line_linear') | crontab -"
+      ok "Linear cron job installed (every 10 minutes)"
     fi
   fi
 
@@ -1271,7 +1279,7 @@ print_checklist() {
       for mapping in "${mappings[@]}"; do
         local proj="${mapping%%:*}"
         local repo="${mapping#*:}"
-        echo "    (cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git)"
+        echo "    (cd $SERVER_HOME/projects/$proj && git remote add origin git@github.com:$repo.git)"
       done
       echo ""
     fi
@@ -1291,7 +1299,7 @@ print_checklist() {
       for mapping in "${mappings[@]}"; do
         local proj="${mapping%%:*}"
         local repo="${mapping#*:}"
-        echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin https://github.com/$repo.git'"
+        echo "    ssh $SERVER_HOST 'cd $SERVER_HOME/projects/$proj && git remote add origin git@github.com:$repo.git'"
       done
       echo ""
     fi
