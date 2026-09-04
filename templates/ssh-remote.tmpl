@@ -3,6 +3,13 @@
 # Usage: ./bin/ssh-remote <command>
 #   e.g., ./bin/ssh-remote "pm2 status"
 #         ./bin/ssh-remote "tail -20 /tmp/ty-daemon.log"
+#
+# Two calling conventions:
+#   1 argument   — a complete command line, interpreted by the remote shell
+#                  (pipes, redirects and globs all work):
+#                    ssh-remote "tail -20 /tmp/ty-daemon.log | grep ERROR"
+#   2+ arguments — an argv; each argument is shell-quoted so it arrives intact:
+#                    ssh-remote grep "some phrase" /tmp/ty-daemon.log
 
 set -euo pipefail
 
@@ -15,10 +22,30 @@ fi
 SERVER_HOST="{{SERVER_HOST}}"
 SERVER_HOME="{{SERVER_HOME}}"
 
+# Build the command string that the remote (or login) shell will run.
+#
+# Whatever we pass gets re-parsed by a shell, so "$*" silently loses argument
+# boundaries: any argument containing whitespace is word-split again on the far
+# side. With a single argument that is the intended behaviour — the caller is
+# handing us a command line. With several arguments the caller is handing us an
+# argv, and each element has to be shell-quoted to survive the round trip.
+#
+# printf '%q' is used rather than bash 4.4's ${@@Q} so this still works on
+# macOS's stock bash 3.2.
+if [ $# -eq 1 ]; then
+  REMOTE_CMD="$1"
+else
+  REMOTE_CMD=""
+  for arg in "$@"; do
+    REMOTE_CMD="$REMOTE_CMD $(printf '%q' "$arg")"
+  done
+  REMOTE_CMD="${REMOTE_CMD# }"
+fi
+
 if [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_HOST" ]]; then
   # Local mode: run on this machine via a login shell, no SSH.
   export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-  exec bash -lc "$*"
+  exec bash -lc "$REMOTE_CMD"
 else
-  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && $*"
+  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && $REMOTE_CMD"
 fi

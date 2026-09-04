@@ -115,6 +115,39 @@ test("formatNotification renders each event type", () => {
   assert.match(formatNotification({ event: "weird", task_id: "4", title: "Huh" }), /Task #4/);
 });
 
+test("formatNotification renders Claude auth events without a task_id", () => {
+  // These come from claude-auth-monitor.sh, which has no task to reference.
+  // The old default branch would have rendered them as "Task #? (auth_failed)".
+  const failed = formatNotification({
+    event: "auth_failed",
+    title: "Claude login on agents-1 has expired — run 'claude /login' as exedev.",
+    project: "engineering",
+  });
+  assert.match(failed, /Claude login expired/);
+  assert.match(failed, /claude \/login/);
+  assert.doesNotMatch(failed, /Task #/);
+
+  const expiring = formatNotification({
+    event: "auth_expiring",
+    title: "Claude login on agents-1 expires in 3 day(s).",
+    days_remaining: 3,
+    project: "engineering",
+  });
+  assert.match(expiring, /expires soon/);
+  assert.match(expiring, /3 days left/);
+  assert.doesNotMatch(expiring, /Task #/);
+
+  // Singular day, and a missing day count must not print "NaN".
+  assert.match(
+    formatNotification({ event: "auth_expiring", title: "x", days_remaining: 1 }),
+    /1 day left/
+  );
+  assert.doesNotMatch(
+    formatNotification({ event: "auth_expiring", title: "x" }),
+    /NaN|undefined/
+  );
+});
+
 test("buildClassifierContext includes thread + open tasks + message", () => {
   const ctx = buildClassifierContext("do the thing", {
     threadTaskId: "12",

@@ -431,7 +431,135 @@ ssh -o ConnectTimeout=5 "$SERVER_HOST" '$HOME/.local/bin/audit.sh' 2>/dev/null
 
 ---
 
-### Check 9: GitHub API Budget
+### Check 9: Claude Auth Health
+
+The server's Claude Code login expires roughly every 30 days. When it lapses,
+every agent task fails or stalls and the only symptom is that no work happens.
+This check reports how long is left, proves the login actually works, and
+installs the monitor that will catch the next expiry automatically.
+
+**Do NOT use `claude auth status` (or `claude doctor`, or `claude mcp list`) as
+the health check.** They read cached local config and never contact Anthropic.
+On credentials that had been dead for 95 days, `claude auth status` still
+returned, with exit 0:
+
+```json
+{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "max"}
+```
+
+**Steps:**
+
+1. **Report days remaining** — free, offline. The access token lasts ~8h and
+   self-refreshes; the refresh token is the real clock (~30 days, sliding):
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'python3 -c "
+import json, time, os
+p = os.path.expanduser(\"~/.claude/.credentials.json\")
+try:
+    d = json.load(open(p))
+except Exception:
+    print(\"NO_CREDENTIALS_FILE\"); raise SystemExit
+o = d.get(\"claudeAiOauth\")
+if not o:
+    print(\"NO_OAUTH_BLOCK\"); raise SystemExit
+e = o.get(\"refreshTokenExpiresAt\")
+if e is None:
+    print(\"PRE_2_1_X_FORMAT_DEAD\"); raise SystemExit
+print(\"DAYS_LEFT=%d\" % int((e/1000 - time.time()) // 86400))
+"' 2>/dev/null
+```
+   - `DAYS_LEFT=N` — report it.
+   - `NO_OAUTH_BLOCK` / `NO_CREDENTIALS_FILE` is **not** proof of failure — the
+     credential may live in an OS keyring or be a long-lived setup-token. Just
+     note that the expiry date is unknown and let the probe in step 2 decide.
+   - `PRE_2_1_X_FORMAT_DEAD` means the credential predates Claude Code 2.1.x,
+     has no sliding refresh token, and is certainly dead.
+
+2. **Run the live probe** — the only truthful check. About 40 tokens, a few
+   seconds. Run it exactly once:
+```bash
+ssh -o ConnectTimeout=15 "$SERVER_HOST" 'export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH" && claude -p "hi" --model haiku --max-turns 1 </dev/null >/dev/null 2>&1 && echo AUTH_OK || echo AUTH_FAILED' 2>/dev/null
+```
+
+3. **Rectify existing installs.** GMs provisioned before the monitor existed have
+   no expiry detection at all. Check whether it's there:
+```bash
+ssh -o ConnectTimeout=5 "$SERVER_HOST" 'test -x $HOME/.local/bin/claude-auth-monitor.sh && echo MONITOR_INSTALLED || echo MONITOR_MISSING; crontab -l 2>/dev/null | grep -q claude-auth-monitor.sh && echo CRON_INSTALLED || echo CRON_MISSING' 2>/dev/null
+```
+
+   **If either is missing, install it — do not just report it.**
+
+   a. Locate the template (repo checkout first, then the installed plugin):
+   ```bash
+   TASKYOU_OS_DIR=""
+   if [ -f "./templates/claude-auth-monitor.tmpl" ]; then
+     TASKYOU_OS_DIR="."
+   else
+     PLUGIN_DIR=$(python3 -c "import json; d=json.load(open('$HOME/.claude/plugins/installed_plugins.json')); entries=d.get('plugins',{}).get('taskyou-os@taskyou-os',[]); print(entries[0]['installPath'] if entries else '')" 2>/dev/null)
+     if [ -n "$PLUGIN_DIR" ] && [ -f "$PLUGIN_DIR/templates/claude-auth-monitor.tmpl" ]; then
+       TASKYOU_OS_DIR="$PLUGIN_DIR"
+     fi
+   fi
+   ```
+
+   b. Read `$TASKYOU_OS_DIR/templates/claude-auth-monitor.tmpl`, substitute
+      `{{SERVER_HOME}}` and `{{PROJECT_NAME}}` with the values from `config.env`,
+      write it to a temp file, then deploy:
+   ```bash
+   scp -q /tmp/claude-auth-monitor.rendered "$SERVER_HOST:$SERVER_HOME/.local/bin/claude-auth-monitor.sh"
+   ssh "$SERVER_HOST" "mkdir -p $SERVER_HOME/scripts && chmod +x $SERVER_HOME/.local/bin/claude-auth-monitor.sh"
+   rm -f /tmp/claude-auth-monitor.rendered
+   ```
+
+   c. Install the cron entry (every 30 minutes). **Every path it writes — flag,
+      state, log — must live under this user's own `$HOME`.** Several GMs can
+      share one box; a log or flag in a shared `/tmp` owned by another user is
+      exactly how a daemon start got broken in production. Never point this at
+      `/tmp`:
+   ```bash
+   CRON_LINE="*/30 * * * * export PATH=$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH && $SERVER_HOME/.local/bin/claude-auth-monitor.sh >> $SERVER_HOME/scripts/claude-auth-monitor.log 2>&1"
+   ssh "$SERVER_HOST" "crontab -l 2>/dev/null | grep -q claude-auth-monitor.sh || (crontab -l 2>/dev/null; echo '$CRON_LINE') | crontab -"
+   ```
+
+   d. Confirm the cron entry landed:
+   ```bash
+   ssh "$SERVER_HOST" 'crontab -l 2>/dev/null | grep claude-auth-monitor.sh'
+   ```
+
+4. **Clear a stale failure flag.** If `~/scripts/.auth-failed` exists but the
+   probe in step 2 returned `AUTH_OK`, the login was fixed but the flag was never
+   cleared — `linear-poll.mjs` is still creating tasks without executing them:
+```bash
+ssh "$SERVER_HOST" 'test -f $HOME/scripts/.auth-failed && rm -f $HOME/scripts/.auth-failed && echo CLEARED_STALE_FLAG'
+```
+   (The monitor clears this itself on its next healthy run; doing it here means
+   the operator isn't blocked for up to 30 minutes.)
+
+**Results:**
+
+- **Probe `AUTH_OK`, monitor + cron present, more than 5 days left:** PASS —
+  "Claude auth healthy, N days left; monitor checks every 30 min."
+- **Probe `AUTH_OK` but 5 days or fewer remain:** WARN — tell the user to run
+  `ssh <SERVER_HOST>` then `claude /login` before it lapses.
+- **Monitor or cron was missing and you installed it:** WARN — "Installed the
+  Claude auth monitor and its cron entry. This install had no expiry detection
+  at all before now."
+- **Stale `.auth-failed` cleared:** WARN — "Cleared a stale auth-failure flag
+  that was stopping the Linear poller from executing tasks."
+- **Probe `AUTH_FAILED`:** FAIL — the agents cannot run. Give the user the fix
+  verbatim:
+  ```
+  ssh <SERVER_HOST>
+  claude /login
+  ```
+  You may mention `claude setup-token`, which issues a 1-year token, as an option
+  for boxes that don't need claude.ai MCP connectors or Remote Control — it
+  disables both, so it is not a universal fix and must not be the default.
+- **SSH connection fails:** FAIL with "Could not connect to server."
+
+---
+
+### Check 10: GitHub API Budget
 
 GitHub bills REST and GraphQL from separate buckets (5,000 req/hr vs 5,000 pts/hr),
 and the bucket is **per user, not per token** — every box that authenticates as the
@@ -489,6 +617,7 @@ TaskYou-OS Doctor
   GM templates          PASS/WARN/FAIL
   Task event channel    PASS/WARN/FAIL
   Security audit        PASS/WARN/FAIL
+  Claude auth health    PASS/WARN/FAIL
   GitHub API budget     PASS/WARN/FAIL
 ─────────────────────────────────
 ```

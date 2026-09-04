@@ -625,6 +625,49 @@ install_daemon_service() {
   fi
 }
 
+# Install the Claude auth expiry monitor + its cron entry.
+# $1 = ssh target, $2 = that host's home directory.
+#
+# Claude Code logins on agent servers expire about every 30 days, and until this
+# existed nothing noticed: tasks simply stopped working. `claude auth status`
+# cannot be used as the check — it reads cached config and never contacts
+# Anthropic, so it keeps reporting {"loggedIn": true, ...} with exit 0 on
+# credentials that have been dead for months. The monitor does a free offline
+# read of the refresh-token expiry and then one real ~40-token model request,
+# which is the only truthful signal. See templates/claude-auth-monitor.tmpl.
+install_auth_monitor() {
+  local ssh_target="$1"
+  local remote_home="$2"
+
+  log "Installing Claude auth monitor"
+
+  # Render against THIS host's home (exe and server modes pass different homes).
+  local rendered="/tmp/taskyou-claude-auth-monitor.$$"
+  ( export SERVER_HOME="$remote_home"
+    render_file "$TEMPLATES_DIR/claude-auth-monitor.tmpl" "$rendered" )
+
+  ssh "$ssh_target" "mkdir -p $remote_home/.local/bin $remote_home/scripts"
+  scp -q "$rendered" "$ssh_target:$remote_home/.local/bin/claude-auth-monitor.sh"
+  scp -q "$MODULES_DIR/common/rotate-log.sh" "$ssh_target:$remote_home/.local/bin/rotate-log.sh"
+  ssh "$ssh_target" "chmod +x $remote_home/.local/bin/claude-auth-monitor.sh $remote_home/.local/bin/rotate-log.sh"
+  rm -f "$rendered"
+  ok "claude-auth-monitor.sh"
+
+  # Cron every 30 minutes. Every path the script writes (flag, state, log) lives
+  # under this user's own $HOME — several GMs can share one box, and a log or
+  # flag in a shared /tmp owned by another user is exactly how a daemon start
+  # got broken in production.
+  # rotate-log.sh runs first: nothing else prunes these logs, and a monitor
+  # stuck in an error loop is exactly how a box ended up with 487MB of them.
+  local cron_line="*/30 * * * * export PATH=$remote_home/.local/bin:$remote_home/bin:$remote_home/.npm-global/bin:\$PATH; $remote_home/.local/bin/rotate-log.sh $remote_home/scripts/claude-auth-monitor.log; $remote_home/.local/bin/claude-auth-monitor.sh >> $remote_home/scripts/claude-auth-monitor.log 2>&1"
+  if ssh "$ssh_target" "crontab -l 2>/dev/null" | grep -qF "$cron_line"; then
+    ok "Auth monitor cron job already up to date"
+  else
+    ssh "$ssh_target" "(crontab -l 2>/dev/null | grep -v 'claude-auth-monitor.sh'; echo '$cron_line') | crontab -"
+    ok "Auth monitor cron job installed (every 30 minutes)"
+  fi
+}
+
 # ── Local-server setup (server = this machine) ───────────────────────────────
 
 # True when the "server" is the same box the GM runs on (no SSH, no systemd).
@@ -913,6 +956,10 @@ EOF
 
   # Install daemon as a systemd user service (auto-starts on boot, restarts on crash)
   install_daemon_service "$SERVER_HOST" "$SERVER_HOME"
+
+  # Claude auth expiry monitor (detects the ~30-day login lapse before it
+  # silently stops every agent).
+  install_auth_monitor "$SERVER_HOST" "$SERVER_HOME"
 
   log "Server setup complete"
 }
@@ -1241,6 +1288,10 @@ EOF
 
   # Install daemon as a systemd user service (auto-starts on boot, restarts on crash)
   install_daemon_service "$EXE_HOST" "$EXE_HOME"
+
+  # Claude auth expiry monitor (detects the ~30-day login lapse before it
+  # silently stops every agent).
+  install_auth_monitor "$EXE_HOST" "$EXE_HOME"
 
   log "exe.dev deployment complete!"
   echo ""

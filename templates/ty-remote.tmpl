@@ -20,5 +20,26 @@ if [[ "$SERVER_HOST" == "local" || "$SERVER_HOST" == "localhost" || -z "$SERVER_
   export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
   cd "$SERVER_HOME" && exec ty "$@"
 else
-  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && cd $SERVER_HOME && ty $*"
+  # Shell-quote every argument for the REMOTE shell.
+  #
+  # ssh does not accept an argv — it accepts ONE command string, which the
+  # remote login shell re-parses. So "$*" (and even "$@") loses argument
+  # boundaries on that round trip: every argument containing whitespace is
+  # word-split again on the far side. Concretely,
+  #
+  #   ty-remote create "My task title" --project engineering --body "Some text"
+  #
+  # reached the remote `ty` as ~8 separate arguments and was rejected with
+  # "Error: accepts at most 1 arg(s), received 8". Single-word commands (list,
+  # execute 179, close 179) were unaffected, which is why this went unnoticed.
+  #
+  # printf '%q' quotes each argument so it survives the remote re-parse as a
+  # single argument, apostrophes and quotes included. (printf rather than bash
+  # 4.4's ${@@Q}, so this still works on macOS's stock bash 3.2.)
+  remote_args=""
+  for arg in "$@"; do
+    remote_args="$remote_args $(printf '%q' "$arg")"
+  done
+
+  ssh "$SERVER_HOST" "export NVM_DIR=\"\$HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && export PATH=\"$SERVER_HOME/.local/bin:$SERVER_HOME/bin:$SERVER_HOME/.npm-global/bin:\$PATH\" && cd $SERVER_HOME && ty$remote_args"
 fi
