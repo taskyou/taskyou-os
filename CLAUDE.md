@@ -9,6 +9,8 @@ This is the TaskYouOS template repo. It generates fully working AI agent managem
 - `templates/` — All `.tmpl` files use `{{VARIABLE}}` placeholders, rendered by setup.sh
 - `templates/hooks/` — Server-side TaskYou hooks
 - `modules/linear/` — Optional Linear integration (CLI + @agent polling)
+- `modules/github/` — Budget-aware GitHub polling helpers + PR conflict scan ([why](modules/github/README.md))
+- `modules/common/` — Shared shell helpers shipped to servers (log rotation)
 - `modules/r2/` — Optional R2 asset hosting config
 
 ## Template Syntax

@@ -1,2 +1,4 @@
 .claude/settings.local.json
 .worktrees/
+modules/*/.env
+modules/*/.pr-conflict-scan-state.json
